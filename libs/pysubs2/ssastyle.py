@@ -1,8 +1,8 @@
 import warnings
-from typing import Dict, Any, ClassVar
+from typing import Dict, Any, ClassVar, FrozenSet
 import dataclasses
 
-from .common import Color
+from .common import Color, Alignment
 
 @dataclasses.dataclass(repr=False)
 class SSAStyle:
@@ -23,7 +23,7 @@ class SSAStyle:
     DEFAULT_STYLE: ClassVar["SSAStyle"] = None  # type: ignore[assignment]
 
     @property
-    def FIELDS(self):
+    def FIELDS(self) -> FrozenSet[str]:
         """All fields in SSAStyle."""
         warnings.warn("Deprecated in 1.2.0 - it's a dataclass now", DeprecationWarning)
         return frozenset(field.name for field in dataclasses.fields(self))
@@ -43,10 +43,10 @@ class SSAStyle:
     scaley: float = 100.0  #: Vertical scaling (ASS only)
     spacing: float = 0.0  #: Letter spacing (ASS only)
     angle: float = 0.0  #: Rotation (ASS only)
-    borderstyle: int = 1  #: Border style
+    borderstyle: int = 1  #: Border style (1=outline, 3=box)
     outline: float = 2.0  #: Outline width (in pixels)
     shadow: float = 2.0  #: Shadow depth (in pixels)
-    alignment: int = 2  #: Numpad-style alignment, eg. 7 is "top left" (that is, ASS alignment semantics)
+    alignment: Alignment = Alignment.BOTTOM_CENTER  #: Text alignment (:class:`pysubs2.Alignment` instance); the underlying integer uses numpad-style alignment, eg. 7 is "top left" (that is, ASS alignment semantics). You can also use ``int`` here, though it is discouraged.
     marginl: int = 10  #: Left margin (in pixels)
     marginr: int = 10  #: Right margin (in pixels)
     marginv: int = 10  #: Vertical margin (in pixels)
@@ -57,7 +57,7 @@ class SSAStyle:
     # but can be used in override tags and thus are useful to keep here
     # for the `pysubs2.substation.parse_tags()` interface which returns
     # SSAStyles for text fragments.
-    drawing: bool = False  #: Indicates that text span is a SSA vector drawing, see `pysubs2.substation.parse_tags()`
+    drawing: bool = False  #: Indicates that text span is a SSA vector drawing, see :func:`pysubs2.substation.parse_tags()`
 
     def copy(self) -> "SSAStyle":
         return SSAStyle(**self.as_dict())
@@ -66,7 +66,7 @@ class SSAStyle:
         # dataclasses.asdict() would recursively dictify Color objects, which we don't want
         return {field.name: getattr(self, field.name) for field in dataclasses.fields(self)}
 
-    def __repr__(self):
+    def __repr__(self) -> str:
         return f"<SSAStyle {self.fontsize!r}px" \
                f"{' bold' if self.bold else ''}" \
                f"{' italic' if self.italic else ''}" \

@@ -1,5 +1,5 @@
 # sql/ddl.py
-# Copyright (C) 2009-2023 the SQLAlchemy authors and contributors
+# Copyright (C) 2009-2025 the SQLAlchemy authors and contributors
 # <see AUTHORS file>
 #
 # This module is part of SQLAlchemy and is released under
@@ -95,8 +95,7 @@ class DDLIfCallable(Protocol):
         dialect: Dialect,
         compiler: Optional[DDLCompiler] = ...,
         checkfirst: bool,
-    ) -> bool:
-        ...
+    ) -> bool: ...
 
 
 class DDLIf(typing.NamedTuple):
@@ -156,8 +155,8 @@ class ExecutableDDLElement(roles.DDLRole, Executable, BaseDDLElement):
 
         event.listen(
             users,
-            'after_create',
-            AddConstraint(constraint).execute_if(dialect='postgresql')
+            "after_create",
+            AddConstraint(constraint).execute_if(dialect="postgresql"),
         )
 
     .. seealso::
@@ -232,20 +231,20 @@ class ExecutableDDLElement(roles.DDLRole, Executable, BaseDDLElement):
         Used to provide a wrapper for event listening::
 
             event.listen(
-                        metadata,
-                        'before_create',
-                        DDL("my_ddl").execute_if(dialect='postgresql')
-                    )
+                metadata,
+                "before_create",
+                DDL("my_ddl").execute_if(dialect="postgresql"),
+            )
 
         :param dialect: May be a string or tuple of strings.
           If a string, it will be compared to the name of the
           executing database dialect::
 
-            DDL('something').execute_if(dialect='postgresql')
+            DDL("something").execute_if(dialect="postgresql")
 
           If a tuple, specifies multiple dialect names::
 
-            DDL('something').execute_if(dialect=('postgresql', 'mysql'))
+            DDL("something").execute_if(dialect=("postgresql", "mysql"))
 
         :param callable\_: A callable, which will be invoked with
           three positional arguments as well as optional keyword
@@ -343,17 +342,19 @@ class DDL(ExecutableDDLElement):
 
       from sqlalchemy import event, DDL
 
-      tbl = Table('users', metadata, Column('uid', Integer))
-      event.listen(tbl, 'before_create', DDL('DROP TRIGGER users_trigger'))
+      tbl = Table("users", metadata, Column("uid", Integer))
+      event.listen(tbl, "before_create", DDL("DROP TRIGGER users_trigger"))
 
-      spow = DDL('ALTER TABLE %(table)s SET secretpowers TRUE')
-      event.listen(tbl, 'after_create', spow.execute_if(dialect='somedb'))
+      spow = DDL("ALTER TABLE %(table)s SET secretpowers TRUE")
+      event.listen(tbl, "after_create", spow.execute_if(dialect="somedb"))
 
-      drop_spow = DDL('ALTER TABLE users SET secretpowers FALSE')
+      drop_spow = DDL("ALTER TABLE users SET secretpowers FALSE")
       connection.execute(drop_spow)
 
     When operating on Table events, the following ``statement``
-    string substitutions are available::
+    string substitutions are available:
+
+    .. sourcecode:: text
 
       %(table)s  - the Table name, with any required quoting applied
       %(schema)s - the schema name, with any required quoting applied
@@ -403,17 +404,14 @@ class DDL(ExecutableDDLElement):
         self.context = context or {}
 
     def __repr__(self):
+        parts = [repr(self.statement)]
+        if self.context:
+            parts.append(f"context={self.context}")
+
         return "<%s@%s; %s>" % (
             type(self).__name__,
             id(self),
-            ", ".join(
-                [repr(self.statement)]
-                + [
-                    "%s=%r" % (key, getattr(self, key))
-                    for key in ("on", "context")
-                    if getattr(self, key)
-                ]
-            ),
+            ", ".join(parts),
         )
 
 
@@ -470,12 +468,12 @@ class CreateSchema(_CreateBase):
 
     __visit_name__ = "create_schema"
 
-    stringify_dialect = "default"  # type: ignore
+    stringify_dialect = "default"
 
     def __init__(
         self,
-        name,
-        if_not_exists=False,
+        name: str,
+        if_not_exists: bool = False,
     ):
         """Create a new :class:`.CreateSchema` construct."""
 
@@ -491,13 +489,13 @@ class DropSchema(_DropBase):
 
     __visit_name__ = "drop_schema"
 
-    stringify_dialect = "default"  # type: ignore
+    stringify_dialect = "default"
 
     def __init__(
         self,
-        name,
-        cascade=False,
-        if_exists=False,
+        name: str,
+        cascade: bool = False,
+        if_exists: bool = False,
     ):
         """Create a new :class:`.DropSchema` construct."""
 
@@ -527,8 +525,6 @@ class CreateTable(_CreateBase):
          :class:`_schema.ForeignKeyConstraint` objects that will be included
          inline within the CREATE construct; if omitted, all foreign key
          constraints that do not specify use_alter=True are included.
-
-         .. versionadded:: 1.0.0
 
         :param if_not_exists: if True, an IF NOT EXISTS operator will be
          applied to the construct.
@@ -574,6 +570,7 @@ class CreateColumn(BaseDDLElement):
         from sqlalchemy import schema
         from sqlalchemy.ext.compiler import compiles
 
+
         @compiles(schema.CreateColumn)
         def compile(element, compiler, **kw):
             column = element.element
@@ -582,9 +579,9 @@ class CreateColumn(BaseDDLElement):
                 return compiler.visit_create_column(element, **kw)
 
             text = "%s SPECIAL DIRECTIVE %s" % (
-                    column.name,
-                    compiler.type_compiler.process(column.type)
-                )
+                column.name,
+                compiler.type_compiler.process(column.type),
+            )
             default = compiler.get_column_default_string(column)
             if default is not None:
                 text += " DEFAULT " + default
@@ -594,8 +591,8 @@ class CreateColumn(BaseDDLElement):
 
             if column.constraints:
                 text += " ".join(
-                            compiler.process(const)
-                            for const in column.constraints)
+                    compiler.process(const) for const in column.constraints
+                )
             return text
 
     The above construct can be applied to a :class:`_schema.Table`
@@ -606,17 +603,21 @@ class CreateColumn(BaseDDLElement):
 
         metadata = MetaData()
 
-        table = Table('mytable', MetaData(),
-                Column('x', Integer, info={"special":True}, primary_key=True),
-                Column('y', String(50)),
-                Column('z', String(20), info={"special":True})
-            )
+        table = Table(
+            "mytable",
+            MetaData(),
+            Column("x", Integer, info={"special": True}, primary_key=True),
+            Column("y", String(50)),
+            Column("z", String(20), info={"special": True}),
+        )
 
         metadata.create_all(conn)
 
     Above, the directives we've added to the :attr:`_schema.Column.info`
     collection
-    will be detected by our custom compilation scheme::
+    will be detected by our custom compilation scheme:
+
+    .. sourcecode:: sql
 
         CREATE TABLE mytable (
                 x SPECIAL DIRECTIVE INTEGER NOT NULL,
@@ -641,18 +642,21 @@ class CreateColumn(BaseDDLElement):
 
         from sqlalchemy.schema import CreateColumn
 
+
         @compiles(CreateColumn, "postgresql")
         def skip_xmin(element, compiler, **kw):
-            if element.element.name == 'xmin':
+            if element.element.name == "xmin":
                 return None
             else:
                 return compiler.visit_create_column(element, **kw)
 
 
-        my_table = Table('mytable', metadata,
-                    Column('id', Integer, primary_key=True),
-                    Column('xmin', Integer)
-                )
+        my_table = Table(
+            "mytable",
+            metadata,
+            Column("id", Integer, primary_key=True),
+            Column("xmin", Integer),
+        )
 
     Above, a :class:`.CreateTable` construct will generate a ``CREATE TABLE``
     which only includes the ``id`` column in the string; the ``xmin`` column
@@ -946,7 +950,6 @@ class SchemaGenerator(InvokeCreateDDLBase):
             checkfirst=self.checkfirst,
             _is_metadata_operation=_is_metadata_operation,
         ):
-
             for column in table.columns:
                 if column.default is not None:
                     self.traverse_single(column.default)
@@ -1027,10 +1030,12 @@ class SchemaDropper(InvokeDropDDLBase):
                 reversed(
                     sort_tables_and_constraints(
                         unsorted_tables,
-                        filter_fn=lambda constraint: False
-                        if not self.dialect.supports_alter
-                        or constraint.name is None
-                        else None,
+                        filter_fn=lambda constraint: (
+                            False
+                            if not self.dialect.supports_alter
+                            or constraint.name is None
+                            else None
+                        ),
                     )
                 )
             )
@@ -1076,7 +1081,6 @@ class SchemaDropper(InvokeDropDDLBase):
             tables=event_collection,
             checkfirst=self.checkfirst,
         ):
-
             for table, fkcs in collection:
                 if table is not None:
                     self.traverse_single(
@@ -1146,7 +1150,6 @@ class SchemaDropper(InvokeDropDDLBase):
             checkfirst=self.checkfirst,
             _is_metadata_operation=_is_metadata_operation,
         ):
-
             DropTable(table)._invoke_with(self.connection)
 
             # traverse client side defaults which may refer to server-side
@@ -1170,7 +1173,6 @@ class SchemaDropper(InvokeDropDDLBase):
             DropConstraint(constraint)._invoke_with(self.connection)
 
     def visit_sequence(self, sequence, drop_ok=False):
-
         if not drop_ok and not self._can_drop_sequence(sequence):
             return
         with self.with_ddl_events(sequence):
@@ -1305,8 +1307,6 @@ def sort_tables_and_constraints(
 
     :param extra_dependencies: a sequence of 2-tuples of tables which will
      also be considered as dependent on each other.
-
-    .. versionadded:: 1.0.0
 
     .. seealso::
 

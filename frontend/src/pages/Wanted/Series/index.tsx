@@ -1,63 +1,61 @@
+import { FunctionComponent, useMemo } from "react";
+import { Link } from "react-router";
+import { Anchor, Badge, Group } from "@mantine/core";
+import { faSearch, faFileLines } from "@fortawesome/free-solid-svg-icons";
+import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
+import { ColumnDef } from "@tanstack/react-table";
 import {
   useEpisodeSubtitleModification,
   useEpisodeWantedPagination,
   useSeriesAction,
 } from "@/apis/hooks";
-import TextPopover from "@/components/TextPopover";
 import Language from "@/components/bazarr/Language";
-import { TaskGroup, task } from "@/modules/task";
+import { task, TaskGroup } from "@/modules/task";
 import WantedView from "@/pages/views/WantedView";
-import { useTableStyles } from "@/styles";
 import { BuildKey } from "@/utilities";
-import { faFileLines, faSearch } from "@fortawesome/free-solid-svg-icons";
-import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
-import { Anchor, Badge, Group, Text } from "@mantine/core";
-import { FunctionComponent, useMemo } from "react";
-import { Link } from "react-router-dom";
-import { Column } from "react-table";
+import TextPopover from "@/components/TextPopover";
 
 const WantedSeriesView: FunctionComponent = () => {
-  const columns: Column<Wanted.Episode>[] = useMemo<Column<Wanted.Episode>[]>(
+  const { download } = useEpisodeSubtitleModification();
+
+  const columns = useMemo<ColumnDef<Wanted.Episode>[]>(
     () => [
       {
-        Header: "Name",
-        accessor: "seriesTitle",
-        Cell: (row) => {
-          const target = `/series/${row.row.original.sonarrSeriesId}`;
-          const { classes } = useTableStyles();
+        header: "Name",
+        accessorKey: "seriesTitle",
+        cell: ({
+          row: {
+            original: { sonarrSeriesId, seriesTitle },
+          },
+        }) => {
+          const target = `/series/${sonarrSeriesId}`;
           return (
-            <Anchor className={classes.primary} component={Link} to={target}>
-              {row.value}
+            <Anchor className="table-primary" component={Link} to={target}>
+              {seriesTitle}
             </Anchor>
           );
         },
       },
       {
-        Header: "Episode",
-        accessor: "episode_number",
+        header: "Episode",
+        accessorKey: "episode_number",
       },
       {
-        accessor: "episodeTitle",
-        Cell: ({ value }) => {
-          const { classes } = useTableStyles();
-
-          return <Text className={classes.noWrap}>{value}</Text>;
-        },
+        accessorKey: "episodeTitle",
       },
-
       {
-        Header: "Path",
-        accessor: "path",
-        Cell: ({ value }) => {
+        header: "Path",
+        accessorKey: "path",
+        cell: ({ value }) => {
           const { classes } = useTableStyles();
           return <Text className={classes.width7em}>{value}</Text>;
         },
       },
       {
-        Header: "Release",
-        accessor: "sceneName",
+        header: "Release",
+        accessorKey: "sceneName",
         className: "width6em text-center",
-        Cell: ({ row }) => {
+        cell: ({ row }) => {
           return (
             <TextPopover text={row.original.sceneName}>
               <FontAwesomeIcon size="2x" icon={faFileLines}></FontAwesomeIcon>
@@ -65,22 +63,26 @@ const WantedSeriesView: FunctionComponent = () => {
           );
         },
       },
-
       {
-        Header: "Missing",
-        accessor: "missing_subtitles",
-        Cell: ({ row, value }) => {
-          const wanted = row.original;
-          const seriesId = wanted.sonarrSeriesId;
-          const episodeId = wanted.sonarrEpisodeId;
-
-          const { download } = useEpisodeSubtitleModification();
+        header: "Missing",
+        accessorKey: "missing_subtitles",
+        cell: ({
+          row: {
+            original: {
+              sonarrSeriesId,
+              sonarrEpisodeId,
+              missing_subtitles: missingSubtitles,
+            },
+          },
+        }) => {
+          const seriesId = sonarrSeriesId;
+          const episodeId = sonarrEpisodeId;
 
           return (
-            <Group spacing="sm">
-              {value.map((item, idx) => (
+            <Group gap="sm">
+              {missingSubtitles.map((item, idx) => (
                 <Badge
-                  color={download.isLoading ? "gray" : undefined}
+                  color={download.isPending ? "gray" : undefined}
                   leftSection={<FontAwesomeIcon icon={faSearch} />}
                   key={BuildKey(idx, item.code2)}
                   style={{ cursor: "pointer" }}
@@ -97,7 +99,7 @@ const WantedSeriesView: FunctionComponent = () => {
                           hi: item.hi,
                           forced: item.forced,
                         },
-                      }
+                      },
                     );
                   }}
                 >
@@ -109,7 +111,7 @@ const WantedSeriesView: FunctionComponent = () => {
         },
       },
     ],
-    []
+    [download],
   );
 
   const { mutateAsync } = useSeriesAction();

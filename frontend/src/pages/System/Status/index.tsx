@@ -1,7 +1,21 @@
-import { useSystemHealth, useSystemStatus } from "@/apis/hooks";
-import { QueryOverlay } from "@/components/async";
-import { GithubRepoRoot } from "@/constants";
-import { Environment, useInterval } from "@/utilities";
+import {
+  FunctionComponent,
+  JSX,
+  PropsWithChildren,
+  ReactNode,
+  useCallback,
+  useState,
+} from "react";
+import {
+  Anchor,
+  Container,
+  Divider,
+  Grid,
+  Space,
+  Stack,
+  Text,
+} from "@mantine/core";
+import { useDocumentTitle } from "@mantine/hooks";
 import { IconDefinition } from "@fortawesome/fontawesome-common-types";
 import {
   faDiscord,
@@ -10,16 +24,17 @@ import {
 } from "@fortawesome/free-brands-svg-icons";
 import { faCode, faPaperPlane } from "@fortawesome/free-solid-svg-icons";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
-import { Anchor, Container, Divider, Grid, Stack, Text } from "@mantine/core";
-import { useDocumentTitle } from "@mantine/hooks";
-import moment from "moment";
+import { useSystemHealth, useSystemStatus } from "@/apis/hooks";
+import { QueryOverlay } from "@/components/async";
+import { GithubRepoRoot } from "@/constants";
+import { Environment, useInterval } from "@/utilities";
 import {
-  FunctionComponent,
-  PropsWithChildren,
-  ReactNode,
-  useCallback,
-  useState,
-} from "react";
+  divisorDay,
+  divisorHour,
+  divisorMinute,
+  divisorSecond,
+  formatTime,
+} from "@/utilities/time";
 import Table from "./table";
 
 interface InfoProps {
@@ -30,12 +45,14 @@ interface InfoProps {
 function Row(props: InfoProps): JSX.Element {
   const { title, children } = props;
   return (
-    <Grid>
-      <Grid.Col span={5}>
-        <Text weight="bold">{title}</Text>
+    <Grid columns={10}>
+      <Grid.Col span={2}>
+        <Text size="sm" ta="right" fw="bold">
+          {title}
+        </Text>
       </Grid.Col>
-      <Grid.Col span={12 - 5}>
-        <Text>{children}</Text>
+      <Grid.Col span={3}>
+        <Text size="sm"> {children}</Text>
       </Grid.Col>
     </Grid>
   );
@@ -68,9 +85,16 @@ const InfoContainer: FunctionComponent<
 > = ({ title, children }) => {
   return (
     <Stack>
-      <h4>{title}</h4>
-      <Divider></Divider>
+      <Divider
+        labelPosition="left"
+        label={
+          <Text size="md" fw="bold">
+            {title}
+          </Text>
+        }
+      ></Divider>
       {children}
+      <Space />
     </Stack>
   );
 };
@@ -84,15 +108,19 @@ const SystemStatusView: FunctionComponent = () => {
   const update = useCallback(() => {
     const startTime = status?.start_time;
     if (startTime) {
-      const duration = moment.duration(
-          moment().utc().unix() - startTime,
-          "seconds"
-        ),
-        days = duration.days(),
-        hours = duration.hours().toString().padStart(2, "0"),
-        minutes = duration.minutes().toString().padStart(2, "0"),
-        seconds = duration.seconds().toString().padStart(2, "0");
-      setUptime(days + "d " + hours + ":" + minutes + ":" + seconds);
+      // Current time in seconds
+      const currentTime = Math.floor(Date.now() / 1000);
+
+      const uptimeInSeconds = currentTime - startTime;
+
+      const uptime: string = formatTime(uptimeInSeconds, [
+        { unit: "d", divisor: divisorDay },
+        { unit: "h", divisor: divisorHour },
+        { unit: "m", divisor: divisorMinute },
+        { unit: "s", divisor: divisorSecond },
+      ]);
+
+      setUptime(uptime);
     }
   }, [status?.start_time]);
 
@@ -117,6 +145,8 @@ const SystemStatusView: FunctionComponent = () => {
           <Row title="Radarr Version">{status?.radarr_version}</Row>
           <Row title="Operating System">{status?.operating_system}</Row>
           <Row title="Python Version">{status?.python_version}</Row>
+          <Row title="Database Engine">{status?.database_engine}</Row>
+          <Row title="Database Version">{status?.database_migration}</Row>
           <Row title="Bazarr Directory">{status?.bazarr_directory}</Row>
           <Row title="Bazarr Config Directory">
             {status?.bazarr_config_directory}

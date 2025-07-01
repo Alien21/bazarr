@@ -1,0 +1,18 @@
+$navbar-width: 200;
+
+:export {
+  colorBrand0: bazarr.$color-brand-0;
+  colorBrand1: bazarr.$color-brand-1;
+  colorBrand2: bazarr.$color-brand-2;
+  colorBrand3: bazarr.$color-brand-3;
+  colorBrand4: bazarr.$color-brand-4;
+  colorBrand5: bazarr.$color-brand-5;
+  colorBrand6: bazarr.$color-brand-6;
+  colorBrand7: bazarr.$color-brand-7;
+  colorBrand8: bazarr.$color-brand-8;
+  colorBrand9: bazarr.$color-brand-9;
+
+  headerHeight: bazarr.$header-height;
+
+  navBarWidth: $navbar-width;
+}

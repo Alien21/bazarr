@@ -1,3 +1,5 @@
+import { FunctionComponent } from "react";
+import { Tooltip } from "@mantine/core";
 import {
   faClock,
   faClosedCaptioning,
@@ -9,8 +11,6 @@ import {
   faUser,
 } from "@fortawesome/free-solid-svg-icons";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
-import { Tooltip } from "@mantine/core";
-import { FunctionComponent } from "react";
 
 enum HistoryAction {
   Delete = 0,
@@ -65,7 +65,12 @@ const HistoryIcon: FunctionComponent<{
 
   if (icon) {
     return (
-      <Tooltip label={label} openDelay={500} position="right">
+      <Tooltip
+        label={label}
+        openDelay={500}
+        position="right"
+        events={{ hover: true, focus: false, touch: true }}
+      >
         <FontAwesomeIcon
           aria-label={label}
           title={title}

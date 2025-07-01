@@ -1,12 +1,12 @@
-import { LOG } from "@/utilities/console";
-import { get, isNull, isUndefined, uniqBy } from "lodash";
 import { useCallback, useMemo, useRef } from "react";
+import { get, isNull, isUndefined, uniqBy } from "lodash";
 import {
   HookType,
   useFormActions,
   useStagedValues,
-} from "../utilities/FormValues";
-import { useSettings } from "../utilities/SettingsProvider";
+} from "@/pages/Settings/utilities/FormValues";
+import { useSettings } from "@/pages/Settings/utilities/SettingsProvider";
+import { LOG } from "@/utilities/console";
 
 export interface BaseInput<T> {
   disabled?: boolean;
@@ -36,7 +36,7 @@ export function useBaseInput<T, V>(props: T & BaseInput<V>) {
 
       setValue(moddedValue, settingKey, settingOptions?.onSubmit);
     },
-    [settingOptions, setValue, settingKey]
+    [settingOptions, setValue, settingKey],
   );
 
   return { value, update, rest };
@@ -44,7 +44,7 @@ export function useBaseInput<T, V>(props: T & BaseInput<V>) {
 
 export function useSettingValue<T>(
   key: string,
-  options?: SettingValueOptions<T>
+  options?: SettingValueOptions<T>,
 ): Readonly<Nullable<T>> {
   const settings = useSettings();
 
@@ -85,7 +85,7 @@ export function useSettingValue<T>(
 export function useUpdateArray<T>(
   key: string,
   current: Readonly<T[]>,
-  compare: keyof T
+  compare: keyof T,
 ) {
   const { setValue } = useFormActions();
   const stagedValue = useStagedValues();
@@ -106,6 +106,6 @@ export function useUpdateArray<T>(
       const newArray = uniqBy([v, ...staged], compareRef.current);
       setValue(newArray, key, hook);
     },
-    [staged, setValue, key]
+    [staged, setValue, key],
   );
 }

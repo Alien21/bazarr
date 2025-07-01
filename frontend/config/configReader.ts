@@ -1,9 +1,9 @@
 /* eslint-disable no-console */
 /// <reference types="node" />
 
-import { readFile } from "fs/promises";
+import { readFileSync } from "fs";
 import { get } from "lodash";
-import YAML from "yaml";
+import { parse } from "yaml";
 
 class ConfigReader {
   config: object;
@@ -12,10 +12,10 @@ class ConfigReader {
     this.config = {};
   }
 
-  async open(path: string) {
+  open(path: string) {
     try {
-      const rawConfig = await readFile(path, "utf8");
-      this.config = YAML.parse(rawConfig);
+      const rawConfig = readFileSync(path, "utf8");
+      this.config = parse(rawConfig);
     } catch (err) {
       // We don't want to catch the error here, handle it on getValue method
     }
@@ -33,7 +33,7 @@ class ConfigReader {
   }
 }
 
-export default async function overrideEnv(env: Record<string, string>) {
+export default function overrideEnv(env: Record<string, string>) {
   const configPath = env["VITE_BAZARR_CONFIG_FILE"];
 
   if (configPath === undefined) {
@@ -41,7 +41,7 @@ export default async function overrideEnv(env: Record<string, string>) {
   }
 
   const reader = new ConfigReader();
-  await reader.open(configPath);
+  reader.open(configPath);
 
   if (env["VITE_API_KEY"] === undefined) {
     try {
@@ -53,7 +53,7 @@ export default async function overrideEnv(env: Record<string, string>) {
       process.env["VITE_API_KEY"] = apiKey;
     } catch (err) {
       throw new Error(
-        `No API key found, please run the backend first, (error: ${err.message})`
+        `No API key found, please run the backend first, (error: ${err.message})`,
       );
     }
   }
@@ -71,7 +71,7 @@ export default async function overrideEnv(env: Record<string, string>) {
       process.env["VITE_PROXY_URL"] = url;
     } catch (err) {
       throw new Error(
-        `No proxy url found, please run the backend first, (error: ${err.message})`
+        `No proxy url found, please run the backend first, (error: ${err.message})`,
       );
     }
   }

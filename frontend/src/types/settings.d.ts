@@ -1,6 +1,7 @@
 /* eslint-disable @typescript-eslint/no-empty-interface */
 interface Settings {
   general: Settings.General;
+  log: Settings.Log;
   proxy: Settings.Proxy;
   auth: Settings.Auth;
   subsync: Settings.Subsync;
@@ -19,7 +20,6 @@ interface Settings {
   xsubs: Settings.XSubs;
   assrt: Settings.Assrt;
   napisy24: Settings.Napisy24;
-  subscene: Settings.Subscene;
   betaseries: Settings.Betaseries;
   titlovi: Settings.Titlovi;
   ktuvit: Settings.Ktuvit;
@@ -62,6 +62,7 @@ declare namespace Settings {
     postprocessing_cmd?: string;
     postprocessing_threshold: number;
     postprocessing_threshold_movie: number;
+    remove_profile_tags: string[];
     single_language: boolean;
     subfolder: string;
     subfolder_custom?: string;
@@ -80,6 +81,13 @@ declare namespace Settings {
     utf8_encode: boolean;
     wanted_search_frequency: number;
     wanted_search_frequency_movie: number;
+  }
+
+  interface Log {
+    include_filter: string;
+    exclude_filter: string;
+    ignore_case: boolean;
+    use_regex: boolean;
   }
 
   interface Proxy {
@@ -165,6 +173,19 @@ declare namespace Settings {
     excluded_tags: string[];
   }
 
+  interface Plex {
+    ip: string;
+    port: number;
+    apikey?: string;
+    ssl?: boolean;
+    set_movie_added?: boolean;
+    set_episode_added?: boolean;
+    movie_library?: string;
+    series_library?: string;
+    update_movie_library?: boolean;
+    update_series_library?: boolean;
+  }
+
   interface Anticaptcha {
     anti_captcha_key?: string;
   }
@@ -202,8 +223,6 @@ declare namespace Settings {
   interface XSubs extends BaseProvider {}
 
   interface Napisy24 extends BaseProvider {}
-
-  interface Subscene extends BaseProvider {}
 
   interface Titlovi extends BaseProvider {}
 

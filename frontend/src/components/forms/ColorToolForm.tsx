@@ -1,11 +1,11 @@
+import { FunctionComponent } from "react";
+import { Button, Divider, Stack } from "@mantine/core";
+import { useForm } from "@mantine/form";
 import { useSubtitleAction } from "@/apis/hooks";
 import { Selector, SelectorOption } from "@/components";
 import { useModals, withModal } from "@/modules/modals";
 import { task } from "@/modules/task";
 import FormUtils from "@/utilities/form";
-import { Button, Divider, Stack } from "@mantine/core";
-import { useForm } from "@mantine/form";
-import { FunctionComponent } from "react";
 
 const TaskName = "Changing Color";
 
@@ -96,7 +96,7 @@ const ColorToolForm: FunctionComponent<Props> = ({ selections, onSubmit }) => {
     validate: {
       color: FormUtils.validation(
         (value) => colorOptions.find((op) => op.value === value) !== undefined,
-        "Must select a color"
+        "Must select a color",
       ),
     },
   });
@@ -110,7 +110,7 @@ const ColorToolForm: FunctionComponent<Props> = ({ selections, onSubmit }) => {
           task.create(s.path, TaskName, mutateAsync, {
             action,
             form: s,
-          })
+          }),
         );
 
         onSubmit?.();

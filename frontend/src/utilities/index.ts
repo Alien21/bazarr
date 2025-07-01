@@ -1,11 +1,11 @@
-import { difference, differenceWith } from "lodash";
 import { Dispatch } from "react";
+import { difference, differenceWith } from "lodash";
 import { isEpisode, isMovie, isSeries } from "./validate";
 
 export function toggleState(
   dispatch: Dispatch<boolean>,
   wait: number,
-  start = false
+  start = false,
 ) {
   dispatch(!start);
   setTimeout(() => dispatch(start), wait);
@@ -43,7 +43,7 @@ export function pathJoin(...parts: string[]) {
 
 export function filterSubtitleBy(
   subtitles: Subtitle[],
-  languages: Language.Info[]
+  languages: Language.Info[],
 ): Subtitle[] {
   if (languages.length === 0) {
     return subtitles.filter((subtitle) => {
@@ -53,10 +53,14 @@ export function filterSubtitleBy(
     const result = differenceWith(
       subtitles,
       languages,
-      (a, b) => a.code2 === b.code2 || a.path !== null || a.code2 === undefined
+      (a, b) => a.code2 === b.code2 || a.path !== null || a.code2 === undefined,
     );
     return difference(subtitles, result);
   }
+}
+
+export function fromPython(value: PythonBoolean | undefined): boolean {
+  return value === "True";
 }
 
 export function toPython(value: boolean): PythonBoolean {

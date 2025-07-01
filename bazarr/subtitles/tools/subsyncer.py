@@ -30,12 +30,18 @@ class SubSyncer:
             self.vad = 'subs_then_webrtc'
         self.log_dir_path = os.path.join(args.config_dir, 'log')
 
-    def sync(self, video_path, srt_path, srt_lang, sonarr_series_id=None, sonarr_episode_id=None, radarr_id=None,
-             reference=None, max_offset_seconds=str(settings.subsync.max_offset_seconds),
-             no_fix_framerate=settings.subsync.no_fix_framerate, gss=settings.subsync.gss):
+    def sync(self, video_path, srt_path, srt_lang, hi, forced,
+             max_offset_seconds, no_fix_framerate, gss, reference=None,
+             sonarr_series_id=None, sonarr_episode_id=None, radarr_id=None):
         self.reference = video_path
         self.srtin = srt_path
-        self.srtout = f'{os.path.splitext(self.srtin)[0]}.synced.srt'
+        if self.srtin.casefold().endswith('.ass'):
+            # try to preserve original subtitle style
+            # ffmpeg will be able to handle this automatically as long as it has the libass filter
+            extension = '.ass'
+        else:
+            extension = '.srt'
+        self.srtout = f'{os.path.splitext(self.srtin)[0]}.synced{extension}'
         self.args = None
 
         ffprobe_exe = get_binary('ffprobe')
@@ -91,8 +97,7 @@ class SubSyncer:
             result = run(self.args)
         except Exception:
             logging.exception(
-                f'BAZARR an exception occurs during the synchronization process for this subtitles: {self.srtin}')
-            raise OSError
+                f'BAZARR an exception occurs during the synchronization process for this subtitle file: {self.srtin}')
         else:
             if settings.subsync.debug:
                 return result
@@ -107,15 +112,20 @@ class SubSyncer:
                                f"{offset_seconds} seconds and a framerate scale factor of "
                                f"{f'{framerate_scale_factor:.2f}'}.")
 
+                    if sonarr_series_id:
+                        prr = path_mappings.path_replace_reverse
+                    else:
+                        prr = path_mappings.path_replace_reverse_movie
+
                     result = ProcessSubtitlesResult(message=message,
-                                                    reversed_path=path_mappings.path_replace_reverse(self.reference),
+                                                    reversed_path=prr(self.reference),
                                                     downloaded_language_code2=srt_lang,
                                                     downloaded_provider=None,
                                                     score=None,
-                                                    forced=None,
+                                                    forced=forced,
                                                     subtitle_id=None,
-                                                    reversed_subtitles_path=srt_path,
-                                                    hearing_impaired=None)
+                                                    reversed_subtitles_path=prr(self.srtin),
+                                                    hearing_impaired=hi)
 
                     if sonarr_episode_id:
                         history_log(action=5, sonarr_series_id=sonarr_series_id, sonarr_episode_id=sonarr_episode_id,

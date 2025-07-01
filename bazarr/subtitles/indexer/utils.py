@@ -2,16 +2,16 @@
 
 import os
 import logging
-import re
 
 from guess_language import guess_language
 from subliminal_patch import core
 from subzero.language import Language
 from charset_normalizer import detect
 
+from constants import MAXIMUM_SUBTITLE_SIZE
 from app.config import settings
-from constants import hi_regex
 from utilities.path_mappings import path_mappings
+from languages.custom_lang import CustomLanguage
 
 
 def get_external_subtitles_path(file, subtitle):
@@ -55,8 +55,7 @@ def guess_external_subtitles(dest_folder, subtitles, media_type, previously_inde
                     break
             if x_found_lang:
                 if not language:
-                    x_hi = ':hi' in x_found_lang
-                    subtitles[subtitle] = Language.rebuild(Language.fromietf(x_found_lang), hi=x_hi)
+                    subtitles[subtitle] = _get_lang_from_str(x_found_lang)
                 continue
 
         if not language:
@@ -68,7 +67,7 @@ def guess_external_subtitles(dest_folder, subtitles, media_type, previously_inde
                 forced = True if os.path.splitext(os.path.splitext(subtitle)[0])[1] == '.forced' else False
 
                 # to improve performance, skip detection of files larger that 1M
-                if os.path.getsize(subtitle_path) > 1 * 1024 * 1024:
+                if os.path.getsize(subtitle_path) > MAXIMUM_SUBTITLE_SIZE:
                     logging.debug(f"BAZARR subtitles file is too large to be text based. Skipping this file: "
                                   f"{subtitle_path}")
                     continue
@@ -119,7 +118,7 @@ def guess_external_subtitles(dest_folder, subtitles, media_type, previously_inde
             # check if file exist:
             if os.path.exists(subtitle_path) and os.path.splitext(subtitle_path)[1] in core.SUBTITLE_EXTENSIONS:
                 # to improve performance, skip detection of files larger that 1M
-                if os.path.getsize(subtitle_path) > 1 * 1024 * 1024:
+                if os.path.getsize(subtitle_path) > MAXIMUM_SUBTITLE_SIZE:
                     logging.debug(f"BAZARR subtitles file is too large to be text based. Skipping this file: "
                                   f"{subtitle_path}")
                     continue
@@ -136,6 +135,29 @@ def guess_external_subtitles(dest_folder, subtitles, media_type, previously_inde
                     continue
                 text = text.decode(encoding)
 
-                if bool(re.search(hi_regex, text)):
-                    subtitles[subtitle] = Language.rebuild(subtitles[subtitle], forced=False, hi=True)
+                if os.path.splitext(subtitle_path)[1] == 'srt':
+                    if core.parse_for_hi_regex(subtitle_text=text,
+                                               alpha3_language=language.alpha3 if hasattr(language, 'alpha3') else
+                                               None):
+                        subtitles[subtitle] = Language.rebuild(subtitles[subtitle], forced=False, hi=True)
     return subtitles
+
+
+def _get_lang_from_str(x_found_lang):
+    x_found_lang_split = x_found_lang.split(':')[0]
+    x_hi = ':hi' in x_found_lang.lower()
+    x_forced = ':forced' in x_found_lang.lower()
+
+    if len(x_found_lang_split) == 2:
+        x_custom_lang_attr = "alpha2"
+    elif len(x_found_lang_split) == 3:
+        x_custom_lang_attr = "alpha3"
+    else:
+        x_custom_lang_attr = "language"
+
+    x_custom_lang = CustomLanguage.from_value(x_found_lang_split, attr=x_custom_lang_attr)
+
+    if x_custom_lang is not None:
+        return Language.rebuild(x_custom_lang.subzero_language(), hi=x_hi, forced=x_forced)
+    else:
+        return Language.rebuild(Language.fromietf(x_found_lang), hi=x_hi, forced=x_forced)

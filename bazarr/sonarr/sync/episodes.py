@@ -5,6 +5,7 @@ import logging
 from constants import MINIMUM_VIDEO_SIZE
 
 from sqlalchemy.exc import IntegrityError
+from datetime import datetime
 
 from app.database import database, TableShows, TableEpisodes, delete, update, insert, select
 from app.config import settings
@@ -12,7 +13,7 @@ from utilities.path_mappings import path_mappings
 from subtitles.indexer.series import store_subtitles, series_full_scan_subtitles
 from subtitles.mass_download import episode_download_subtitles
 from app.event_handler import event_stream
-from sonarr.info import get_sonarr_info, url_sonarr
+from sonarr.info import get_sonarr_info
 
 from .parser import episodeParser
 from .utils import get_episodes_from_sonarr_api, get_episodesFiles_from_sonarr_api
@@ -21,9 +22,12 @@ from .utils import get_episodes_from_sonarr_api, get_episodesFiles_from_sonarr_a
 bool_map = {"True": True, "False": False}
 
 FEATURE_PREFIX = "SYNC_EPISODES "
+
+
 def trace(message):
     if settings.general.debug:
         logging.debug(FEATURE_PREFIX + message)
+
 
 def get_episodes_monitored_table(series_id):
     episodes_monitored = database.execute(
@@ -32,7 +36,8 @@ def get_episodes_monitored_table(series_id):
         .all()
     episode_dict = dict((x, y) for x, y in episodes_monitored)
     return episode_dict
-  
+
+
 def update_all_episodes():
     series_full_scan_subtitles()
     logging.info('BAZARR All existing episode subtitles indexed from disk.')
@@ -73,7 +78,6 @@ def sync_episodes(series_id, send_event=True):
                     item = [x for x in episodeFiles if x['id'] == episode['episodeFileId']]
                     if item:
                         episode['episodeFile'] = item[0]
-
 
         sync_monitored = settings.sonarr.sync_only_monitored_series and settings.sonarr.sync_only_monitored_episodes
         if sync_monitored:
@@ -122,7 +126,7 @@ def sync_episodes(series_id, send_event=True):
                                 episodes_to_add.append(episodeParser(episode))
     else:
         return
-    
+
     if sync_monitored:
         # try to avoid unnecessary database calls
         if settings.general.debug:
@@ -142,10 +146,27 @@ def sync_episodes(series_id, send_event=True):
                 if send_event:
                     event_stream(type='episode', action='delete', payload=removed_episode)
 
+    # Insert new episodes in DB
+    if len(episodes_to_add):
+        for added_episode in episodes_to_add:
+            try:
+                added_episode['created_at_timestamp'] = datetime.now()
+                database.execute(insert(TableEpisodes).values(added_episode))
+            except IntegrityError as e:
+                logging.error(f"BAZARR cannot insert episodes because of {e}. We'll try to update it instead.")
+                del added_episode['created_at_timestamp']
+                episodes_to_update.append(added_episode)
+            else:
+                store_subtitles(added_episode['path'], path_mappings.path_replace(added_episode['path']))
+
+                if send_event:
+                    event_stream(type='episode', payload=added_episode['sonarrEpisodeId'])
+
     # Update existing episodes in DB
     if len(episodes_to_update):
         for updated_episode in episodes_to_update:
             try:
+                updated_episode['updated_at_timestamp'] = datetime.now()
                 database.execute(update(TableEpisodes)
                                  .values(updated_episode)
                                  .where(TableEpisodes.sonarrEpisodeId == updated_episode['sonarrEpisodeId']))
@@ -157,25 +178,11 @@ def sync_episodes(series_id, send_event=True):
                 if send_event:
                     event_stream(type='episode', action='update', payload=updated_episode['sonarrEpisodeId'])
 
-    # Insert new episodes in DB
-    if len(episodes_to_add):
-        for added_episode in episodes_to_add:
-            try:
-                database.execute(insert(TableEpisodes).values(added_episode))
-            except IntegrityError as e:
-                logging.error(f"BAZARR cannot insert episodes because of {e}")
-            else:
-                store_subtitles(added_episode['path'], path_mappings.path_replace(added_episode['path']))
-
-                if send_event:
-                    event_stream(type='episode', payload=added_episode['sonarrEpisodeId'])
-
     logging.debug(f'BAZARR All episodes from series ID {series_id} synced from Sonarr into database.')
 
 
 def sync_one_episode(episode_id, defer_search=False):
     logging.debug(f'BAZARR syncing this specific episode from Sonarr: {episode_id}')
-    url = url_sonarr()
     apikey_sonarr = settings.sonarr.apikey
 
     # Check if there's a row in database for this episode ID
@@ -223,6 +230,7 @@ def sync_one_episode(episode_id, defer_search=False):
     # Update existing episodes in DB
     elif episode and existing_episode:
         try:
+            episode['updated_at_timestamp'] = datetime.now()
             database.execute(
                 update(TableEpisodes)
                 .values(episode)
@@ -238,6 +246,7 @@ def sync_one_episode(episode_id, defer_search=False):
     # Insert new episodes in DB
     elif episode and not existing_episode:
         try:
+            episode['created_at_timestamp'] = datetime.now()
             database.execute(
                 insert(TableEpisodes)
                 .values(episode))
@@ -249,16 +258,17 @@ def sync_one_episode(episode_id, defer_search=False):
             logging.debug(
                 f'BAZARR inserted this episode into the database:{path_mappings.path_replace(episode["path"])}')
 
-    # Storing existing subtitles
-    logging.debug(f'BAZARR storing subtitles for this episode: {path_mappings.path_replace(episode["path"])}')
-    store_subtitles(episode['path'], path_mappings.path_replace(episode['path']))
-
     # Downloading missing subtitles
     if defer_search:
         logging.debug(
             f'BAZARR searching for missing subtitles is deferred until scheduled task execution for this episode: '
             f'{path_mappings.path_replace(episode["path"])}')
     else:
-        logging.debug(
-            f'BAZARR downloading missing subtitles for this episode: {path_mappings.path_replace(episode["path"])}')
-        episode_download_subtitles(episode_id)
+        mapped_episode_path = path_mappings.path_replace(episode["path"])
+        if os.path.exists(mapped_episode_path):
+            logging.debug(f'BAZARR downloading missing subtitles for this episode: {mapped_episode_path}')
+            episode_download_subtitles(episode_id, send_progress=True)
+        else:
+            logging.debug(f'BAZARR cannot find this file yet (Sonarr may be slow to import episode between disks?). '
+                          f'Searching for missing subtitles is deferred until scheduled task execution for this episode'
+                          f': {mapped_episode_path}')

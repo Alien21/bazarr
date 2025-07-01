@@ -3,9 +3,9 @@
 import logging
 
 from sqlalchemy.exc import IntegrityError
+from datetime import datetime
 
 from app.config import settings
-from sonarr.info import url_sonarr
 from subtitles.indexer.series import list_missing_subtitles
 from sonarr.rootfolder import check_sonarr_rootfolder
 from app.database import TableShows, TableLanguagesProfiles, database, insert, update, delete, select
@@ -20,16 +20,25 @@ from .utils import get_profile_list, get_tags, get_series_from_sonarr_api
 bool_map = {"True": True, "False": False}
 
 FEATURE_PREFIX = "SYNC_SERIES "
+
+
 def trace(message):
     if settings.general.debug:
         logging.debug(FEATURE_PREFIX + message)
 
+
+def get_language_profiles():
+    return database.execute(
+        select(TableLanguagesProfiles.profileId, TableLanguagesProfiles.name, TableLanguagesProfiles.tag)).all()
+
+
 def get_series_monitored_table():
     series_monitored = database.execute(
-        select(TableShows.tvdbId, TableShows.monitored))\
+        select(TableShows.sonarrSeriesId, TableShows.monitored))\
         .all()
     series_dict = dict((x, y) for x, y in series_monitored)
     return series_dict
+
 
 def update_series(send_event=True):
     check_sonarr_rootfolder()
@@ -55,6 +64,7 @@ def update_series(send_event=True):
 
     audio_profiles = get_profile_list()
     tagsDict = get_tags()
+    language_profiles = get_language_profiles()
 
     # Get shows data from Sonarr
     series = get_series_from_sonarr_api(apikey_sonarr=apikey_sonarr)
@@ -74,7 +84,7 @@ def update_series(send_event=True):
             series_monitored = get_series_monitored_table()
             skipped_count = 0
         trace(f"Starting sync for {series_count} shows")
-        
+
         for i, show in enumerate(series):
             if send_event:
                 show_progress(id='series_progress',
@@ -85,7 +95,7 @@ def update_series(send_event=True):
 
             if sync_monitored:
                 try:
-                    monitored_status_db = bool_map[series_monitored[show['tvdbId']]]
+                    monitored_status_db = bool_map[series_monitored[show['id']]]
                 except KeyError:
                     monitored_status_db = None
                 if monitored_status_db is None:
@@ -108,6 +118,7 @@ def update_series(send_event=True):
 
             if show['id'] in current_shows_db:
                 updated_series = seriesParser(show, action='update', tags_dict=tagsDict,
+                                              language_profiles=language_profiles,
                                               serie_default_profile=serie_default_profile,
                                               audio_profiles=audio_profiles)
 
@@ -117,6 +128,7 @@ def update_series(send_event=True):
                         .first():
                     try:
                         trace(f"Updating {show['title']}")
+                        updated_series['updated_at_timestamp'] = datetime.now()
                         database.execute(
                             update(TableShows)
                             .values(updated_series)
@@ -129,11 +141,13 @@ def update_series(send_event=True):
                     event_stream(type='series', payload=show['id'])
             else:
                 added_series = seriesParser(show, action='insert', tags_dict=tagsDict,
+                                            language_profiles=language_profiles,
                                             serie_default_profile=serie_default_profile,
                                             audio_profiles=audio_profiles)
 
                 try:
                     trace(f"Inserting {show['title']}")
+                    added_series['created_at_timestamp'] = datetime.now()
                     database.execute(
                         insert(TableShows)
                         .values(added_series))
@@ -152,7 +166,7 @@ def update_series(send_event=True):
         removed_series = list(set(current_shows_db) - set(current_shows_sonarr))
 
         for series in removed_series:
-             # try to avoid unnecessary database calls
+            # try to avoid unnecessary database calls
             if settings.general.debug:
                 series_title = database.execute(select(TableShows.title).where(TableShows.sonarrSeriesId == series)).first()[0]
                 trace(f"Deleting {series_title}")
@@ -164,7 +178,11 @@ def update_series(send_event=True):
                 event_stream(type='series', action='delete', payload=series)
 
         if send_event:
-            hide_progress(id='series_progress')
+            show_progress(id='series_progress',
+                          header='Syncing series...',
+                          name='',
+                          value=series_count,
+                          count=series_count)
 
         if sync_monitored:
             trace(f"skipped {skipped_count} unmonitored series out of {i}")
@@ -200,7 +218,7 @@ def update_one_series(series_id, action):
 
     audio_profiles = get_profile_list()
     tagsDict = get_tags()
-
+    language_profiles = get_language_profiles()
     try:
         # Get series data from sonarr api
         series = None
@@ -212,10 +230,12 @@ def update_one_series(series_id, action):
         else:
             if action == 'updated' and existing_series:
                 series = seriesParser(series_data[0], action='update', tags_dict=tagsDict,
+                                      language_profiles=language_profiles,
                                       serie_default_profile=serie_default_profile,
                                       audio_profiles=audio_profiles)
             elif action == 'updated' and not existing_series:
                 series = seriesParser(series_data[0], action='insert', tags_dict=tagsDict,
+                                      language_profiles=language_profiles,
                                       serie_default_profile=serie_default_profile,
                                       audio_profiles=audio_profiles)
     except Exception:
@@ -225,6 +245,7 @@ def update_one_series(series_id, action):
     # Update existing series in DB
     if action == 'updated' and existing_series:
         try:
+            series['updated_at_timestamp'] = datetime.now()
             database.execute(
                 update(TableShows)
                 .values(series)
@@ -239,6 +260,7 @@ def update_one_series(series_id, action):
     # Insert new series in DB
     elif action == 'updated' and not existing_series:
         try:
+            series['created_at_timestamp'] = datetime.now()
             database.execute(
                 insert(TableShows)
                 .values(series))

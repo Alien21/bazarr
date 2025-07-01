@@ -1,24 +1,24 @@
-import { render, screen } from "@/tests";
 import { Text } from "@mantine/core";
 import { describe, it } from "vitest";
+import { customRender, screen } from "@/tests";
 import Layout from "./Layout";
 
 describe("Settings layout", () => {
   it.concurrent("should be able to render without issues", () => {
-    render(
+    customRender(
       <Layout name="Test Settings">
         <Text>Value</Text>
-      </Layout>
+      </Layout>,
     );
   });
 
   it.concurrent("save button should be disabled by default", () => {
-    render(
+    customRender(
       <Layout name="Test Settings">
         <Text>Value</Text>
-      </Layout>
+      </Layout>,
     );
 
-    expect(screen.getByRole("button", { name: "Save" })).toBeDisabled();
+    expect(screen.getAllByRole("button", { name: "Save" })[0]).toBeDisabled();
   });
 });

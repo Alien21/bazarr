@@ -4,20 +4,42 @@ import re
 import sys
 import typing
 
-from .util import col, line, lineno, _collapse_string_to_ranges
+from .util import (
+    col,
+    line,
+    lineno,
+    _collapse_string_to_ranges,
+    replaced_by_pep8,
+)
 from .unicode import pyparsing_unicode as ppu
 
 
-class ExceptionWordUnicode(ppu.Latin1, ppu.LatinA, ppu.LatinB, ppu.Greek, ppu.Cyrillic):
+class _ExceptionWordUnicodeSet(
+    ppu.Latin1, ppu.LatinA, ppu.LatinB, ppu.Greek, ppu.Cyrillic
+):
     pass
 
 
-_extract_alphanums = _collapse_string_to_ranges(ExceptionWordUnicode.alphanums)
+_extract_alphanums = _collapse_string_to_ranges(_ExceptionWordUnicodeSet.alphanums)
 _exception_word_extractor = re.compile("([" + _extract_alphanums + "]{1,16})|.")
 
 
 class ParseBaseException(Exception):
     """base exception class for all parsing runtime exceptions"""
+
+    loc: int
+    msg: str
+    pstr: str
+    parser_element: typing.Any  # "ParserElement"
+    args: typing.Tuple[str, int, typing.Optional[str]]
+
+    __slots__ = (
+        "loc",
+        "msg",
+        "pstr",
+        "parser_element",
+        "args",
+    )
 
     # Performance tuning: we construct a *lot* of these, so keep this
     # constructor as small and fast as possible
@@ -35,7 +57,7 @@ class ParseBaseException(Exception):
         else:
             self.msg = msg
             self.pstr = pstr
-        self.parser_element = self.parserElement = elem
+        self.parser_element = elem
         self.args = (pstr, loc, msg)
 
     @staticmethod
@@ -63,44 +85,42 @@ class ParseBaseException(Exception):
         ret = []
         if isinstance(exc, ParseBaseException):
             ret.append(exc.line)
-            ret.append(" " * (exc.column - 1) + "^")
-        ret.append("{}: {}".format(type(exc).__name__, exc))
+            ret.append(f"{' ' * (exc.column - 1)}^")
+        ret.append(f"{type(exc).__name__}: {exc}")
 
-        if depth > 0:
-            callers = inspect.getinnerframes(exc.__traceback__, context=depth)
-            seen = set()
-            for i, ff in enumerate(callers[-depth:]):
-                frm = ff[0]
+        if depth <= 0:
+            return "\n".join(ret)
 
-                f_self = frm.f_locals.get("self", None)
-                if isinstance(f_self, ParserElement):
-                    if frm.f_code.co_name not in ("parseImpl", "_parseNoCache"):
-                        continue
-                    if id(f_self) in seen:
-                        continue
-                    seen.add(id(f_self))
+        callers = inspect.getinnerframes(exc.__traceback__, context=depth)
+        seen = set()
+        for ff in callers[-depth:]:
+            frm = ff[0]
 
-                    self_type = type(f_self)
-                    ret.append(
-                        "{}.{} - {}".format(
-                            self_type.__module__, self_type.__name__, f_self
-                        )
-                    )
+            f_self = frm.f_locals.get("self", None)
+            if isinstance(f_self, ParserElement):
+                if not frm.f_code.co_name.startswith(("parseImpl", "_parseNoCache")):
+                    continue
+                if id(f_self) in seen:
+                    continue
+                seen.add(id(f_self))
 
-                elif f_self is not None:
-                    self_type = type(f_self)
-                    ret.append("{}.{}".format(self_type.__module__, self_type.__name__))
+                self_type = type(f_self)
+                ret.append(f"{self_type.__module__}.{self_type.__name__} - {f_self}")
 
-                else:
-                    code = frm.f_code
-                    if code.co_name in ("wrapper", "<module>"):
-                        continue
+            elif f_self is not None:
+                self_type = type(f_self)
+                ret.append(f"{self_type.__module__}.{self_type.__name__}")
 
-                    ret.append("{}".format(code.co_name))
+            else:
+                code = frm.f_code
+                if code.co_name in ("wrapper", "<module>"):
+                    continue
 
-                depth -= 1
-                if not depth:
-                    break
+                ret.append(code.co_name)
+
+            depth -= 1
+            if not depth:
+                break
 
         return "\n".join(ret)
 
@@ -110,7 +130,7 @@ class ParseBaseException(Exception):
         internal factory method to simplify creating one type of ParseException
         from another - avoids having __init__ signature conflicts among subclasses
         """
-        return cls(pe.pstr, pe.loc, pe.msg, pe.parserElement)
+        return cls(pe.pstr, pe.loc, pe.msg, pe.parser_element)
 
     @property
     def line(self) -> str:
@@ -140,6 +160,15 @@ class ParseBaseException(Exception):
         """
         return col(self.loc, self.pstr)
 
+    # pre-PEP8 compatibility
+    @property
+    def parserElement(self):
+        return self.parser_element
+
+    @parserElement.setter
+    def parserElement(self, elem):
+        self.parser_element = elem
+
     def __str__(self) -> str:
         if self.pstr:
             if self.loc >= len(self.pstr):
@@ -154,14 +183,14 @@ class ParseBaseException(Exception):
                 foundstr = (", found %r" % found).replace(r"\\", "\\")
         else:
             foundstr = ""
-        return "{}{}  (at char {}), (line:{}, col:{})".format(
-            self.msg, foundstr, self.loc, self.lineno, self.column
-        )
+        return f"{self.msg}{foundstr}  (at char {self.loc}), (line:{self.lineno}, col:{self.column})"
 
     def __repr__(self):
         return str(self)
 
-    def mark_input_line(self, marker_string: str = None, *, markerString=">!<") -> str:
+    def mark_input_line(
+        self, marker_string: typing.Optional[str] = None, *, markerString: str = ">!<"
+    ) -> str:
         """
         Extracts the exception line from the input string, and marks
         the location of the exception with a special symbol.
@@ -191,8 +220,10 @@ class ParseBaseException(Exception):
 
         Example::
 
+            # an expression to parse 3 integers
             expr = pp.Word(pp.nums) * 3
             try:
+                # a failing parse - the third integer is prefixed with "A"
                 expr.parse_string("123 456 A789")
             except pp.ParseException as pe:
                 print(pe.explain(depth=0))
@@ -214,7 +245,10 @@ class ParseBaseException(Exception):
         """
         return self.explain_exception(self, depth)
 
-    markInputline = mark_input_line
+    # Compatibility synonyms
+    # fmt: off
+    markInputline = replaced_by_pep8("markInputline", mark_input_line)
+    # fmt: on
 
 
 class ParseException(ParseBaseException):
@@ -223,16 +257,16 @@ class ParseException(ParseBaseException):
 
     Example::
 
+        integer = Word(nums).set_name("integer")
         try:
-            Word(nums).set_name("integer").parse_string("ABC")
+            integer.parse_string("ABC")
         except ParseException as pe:
             print(pe)
-            print("column: {}".format(pe.column))
+            print(f"column: {pe.column}")
 
     prints::
 
-       Expected integer (at char 0), (line:1, col:1)
-        column: 1
+       Expected integer (at char 0), (line:1, col:1) column: 1
 
     """
 
@@ -264,4 +298,4 @@ class RecursiveGrammarException(Exception):
         self.parseElementTrace = parseElementList
 
     def __str__(self) -> str:
-        return "RecursiveGrammarException: {}".format(self.parseElementTrace)
+        return f"RecursiveGrammarException: {self.parseElementTrace}"

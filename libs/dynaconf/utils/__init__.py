@@ -7,11 +7,12 @@ from json import JSONDecoder
 from typing import Any
 from typing import Iterator
 from typing import TYPE_CHECKING
-
+from typing import TypeVar
 
 if TYPE_CHECKING:  # pragma: no cover
+    from dynaconf.base import LazySettings
+    from dynaconf.base import Settings
     from dynaconf.utils.boxing import DynaBox
-    from dynaconf.base import LazySettings, Settings
 
 
 BANNER = """
@@ -46,7 +47,6 @@ def object_merge(
         return new
 
     if isinstance(old, list) and isinstance(new, list):
-
         # 726: allow local_merge to override global merge on lists
         if "dynaconf_merge_unique" in new:
             new.remove("dynaconf_merge_unique")
@@ -69,27 +69,38 @@ def object_merge(
             if correct_case_key:
                 new[correct_case_key] = new.pop(new_key)
 
-        for old_key, value in old.items():
-
-            # This is for when the dict exists internally
-            # but the new value on the end of full path is the same
-            if (
-                existing_value is not None
-                and old_key.lower() == full_path[-1].lower()
-                and existing_value is value
-            ):
-                # Here Be The Dragons
-                # This comparison needs to be smarter
-                continue
-
-            if old_key not in new:
-                new[old_key] = value
+        def safe_items(data):
+            """
+            Get items from DynaBox without triggering recursive evaluation
+            """
+            if data.__class__.__name__ == "DynaBox":
+                return data._safe_items()
             else:
-                object_merge(
-                    value,
-                    new[old_key],
-                    full_path=full_path[1:] if full_path else None,
-                )
+                return data.items()
+
+        # local mark may set dynaconf_merge=False
+        should_merge = new.pop("dynaconf_merge", True)
+        if should_merge:
+            for old_key, value in safe_items(old):
+                # This is for when the dict exists internally
+                # but the new value on the end of full path is the same
+                if (
+                    existing_value is not None
+                    and old_key.lower() == full_path[-1].lower()
+                    and existing_value is value
+                ):
+                    # Here Be The Dragons
+                    # This comparison needs to be smarter
+                    continue
+
+                if old_key not in new:
+                    new[old_key] = value
+                else:
+                    object_merge(
+                        value,
+                        new[old_key],
+                        full_path=full_path[1:] if full_path else None,
+                    )
 
         handle_metavalues(old, new)
 
@@ -118,7 +129,6 @@ def handle_metavalues(
     """Cleanup of MetaValues on new dict"""
 
     for key in list(new.keys()):
-
         # MetaValue instances
         if getattr(new[key], "_dynaconf_reset", False):  # pragma: no cover
             # a Reset on `new` triggers reasign of existing data
@@ -287,10 +297,13 @@ def trimmed_split(
             continue
         data = [item.strip() for item in s.strip().split(sep)]
         return data
-    return [s]  # raw un-splitted
+    return [s]  # raw un-split
 
 
-def ensure_a_list(data: Any) -> list[int] | list[str]:
+T = TypeVar("T")
+
+
+def ensure_a_list(data: T | list[T]) -> list[T]:
     """Ensure data is a list or wrap it in a list"""
     if not data:
         return []
@@ -408,7 +421,13 @@ def recursively_evaluate_lazy_format(
 
     For example: Evaluate values inside lists and dicts
     """
+    return _recursively_evaluate_lazy_format(value, settings)
 
+
+def _recursively_evaluate_lazy_format(
+    value: Any, settings: Settings | LazySettings
+) -> Any:
+    """Recursive implementation. Separate for easier debugging."""
     if getattr(value, "_dynaconf_lazy_format", None):
         value = value(settings)
 
@@ -416,7 +435,7 @@ def recursively_evaluate_lazy_format(
         # Keep the original type, can be a BoxList
         value = value.__class__(
             [
-                recursively_evaluate_lazy_format(item, settings)
+                _recursively_evaluate_lazy_format(item, settings)
                 for item in value
             ]
         )
@@ -438,11 +457,13 @@ def isnamedtupleinstance(value):
     f = getattr(t, "_fields", None)
     if not isinstance(f, tuple):
         return False
-    return all(type(n) == str for n in f)
+    return all(isinstance(n, str) for n in f)
 
 
 def find_the_correct_casing(key: str, data: dict[str, Any]) -> str | None:
-    """Given a key, find the proper casing in data
+    """Given a key, find the proper casing in data.
+
+    Return 'None' for non-str key types.
 
     Arguments:
         key {str} -- A key to be searched in data
@@ -451,9 +472,11 @@ def find_the_correct_casing(key: str, data: dict[str, Any]) -> str | None:
     Returns:
         str -- The proper casing of the key in data
     """
-    if key in data:
+    if not isinstance(key, str) or key in data:
         return key
     for k in data.keys():
+        if not isinstance(k, str):
+            return None
         if k.lower() == key.lower():
             return k
         if k.replace(" ", "_").lower() == key.lower():

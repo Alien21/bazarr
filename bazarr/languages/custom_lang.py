@@ -5,7 +5,8 @@ import os
 
 from subzero.language import Language
 
-from app.database import database, insert
+from app.database import database, insert, update
+from sqlalchemy.exc import IntegrityError
 
 logger = logging.getLogger(__name__)
 
@@ -18,7 +19,7 @@ class CustomLanguage:
     language = "pt-BR"
     official_alpha2 = "pt"
     official_alpha3 = "por"
-    name = "Brazilian Portuguese"
+    name = "Portuguese (Brazil)"
     iso = "BR"
     _scripts = []
     _possible_matches = ("pt-br", "pob", "pb", "brazilian", "brasil", "brazil")
@@ -50,13 +51,19 @@ class CustomLanguage:
         """Register the custom language subclasses in the database."""
 
         for sub in cls.__subclasses__():
-            database.execute(
-                insert(table)
-                .values(code3=sub.alpha3,
-                        code2=sub.alpha2,
-                        name=sub.name,
-                        enabled=0)
-                .on_conflict_do_nothing())
+            try:
+                database.execute(
+                    insert(table)
+                    .values(code3=sub.alpha3,
+                            code2=sub.alpha2,
+                            name=sub.name,
+                            enabled=0))
+            except IntegrityError:
+                database.execute(
+                    update(table)
+                    .values(code2=sub.alpha2,
+                            name=sub.name)
+                    .where(table.code3 == sub.alpha3))
 
     @classmethod
     def found_external(cls, subtitle, subtitle_path):
@@ -152,6 +159,8 @@ class ChineseTraditional(CustomLanguage):
     )
     _extensions_hi = (
         ".cht.hi", ".tc.hi", ".zht.hi", "hant.hi", ".big5.hi", "繁體中文.hi", "雙語.hi", ".zh-tw.hi",
+        ".cht.cc", ".tc.cc", ".zht.cc", "hant.cc", ".big5.cc", "繁體中文.cc", "雙語.cc", ".zh-tw.cc",
+        ".cht.sdh", ".tc.sdh", ".zht.sdh", "hant.sdh", ".big5.sdh", "繁體中文.sdh", "雙語.sdh", ".zh-tw.sdh",
     )
     _extensions_fuzzy = ("繁", "雙語")
     _extensions_disamb_fuzzy = ("简", "双语")
@@ -212,7 +221,7 @@ class LatinAmericanSpanish(CustomLanguage):
     language = "es-MX"
     official_alpha2 = "es"
     official_alpha3 = "spa"
-    name = "Latin American Spanish"
+    name = "Spanish (Latino)"
     iso = "MX"  # Not fair, but ok
     _scripts = ("419",)
     _possible_matches = (

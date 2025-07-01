@@ -180,7 +180,9 @@ def list_missing_subtitles_movies(no=None, send_event=True, subtitles=None):
                         if any(x['code2'] == language['language'] for x in get_audio_profile_languages(
                                 movie_subtitles.audio_language)):
                             continue
-                    desired_subtitles_list.append([language['language'], language['forced'], language['hi']])
+                    desired_subtitles_list.append({'language': language['language'],
+                                                   'forced': language['forced'],
+                                                   'hi': language['hi']})
 
             # get existing subtitles
             actual_subtitles_list = []
@@ -203,7 +205,9 @@ def list_missing_subtitles_movies(no=None, send_event=True, subtitles=None):
                         elif subtitles[1] == 'hi':
                             forced = False
                             hi = True
-                    actual_subtitles_list.append([lang, str(forced), str(hi)])
+                    actual_subtitles_list.append({'language': lang,
+                                                  'forced': str(forced),
+                                                  'hi': str(hi)})
 
             # check if cutoff is reached and skip any further check
             cutoff_met = False
@@ -211,7 +215,9 @@ def list_missing_subtitles_movies(no=None, send_event=True, subtitles=None):
 
             if cutoff_temp_list:
                 for cutoff_temp in cutoff_temp_list:
-                    cutoff_language = [cutoff_temp['language'], cutoff_temp['forced'], cutoff_temp['hi']]
+                    cutoff_language = {'language': cutoff_temp['language'],
+                                       'forced': cutoff_temp['forced'],
+                                       'hi': cutoff_temp['hi']}
                     if cutoff_temp['audio_exclude'] == 'True' and \
                             any(x['code2'] == cutoff_temp['language'] for x in
                                 get_audio_profile_languages(movie_subtitles.audio_language)):
@@ -219,7 +225,10 @@ def list_missing_subtitles_movies(no=None, send_event=True, subtitles=None):
                     elif cutoff_language in actual_subtitles_list:
                         cutoff_met = True
                     # HI is considered as good as normal
-                    elif cutoff_language and [cutoff_language[0], 'False', 'True'] in actual_subtitles_list:
+                    elif (cutoff_language and
+                          {'language': cutoff_language['language'],
+                           'forced': 'False',
+                           'hi': 'True'} in actual_subtitles_list):
                         cutoff_met = True
 
             if cutoff_met:
@@ -231,21 +240,23 @@ def list_missing_subtitles_movies(no=None, send_event=True, subtitles=None):
                     if item not in actual_subtitles_list:
                         missing_subtitles_list.append(item)
 
-                # remove missing that have forced or hi subtitles for this language in existing
+                    # remove missing that have forced or hi subtitles for this language in existing
                 for item in actual_subtitles_list:
-                    if item[2] == 'True':
+                    if item['hi'] == 'True':
                         try:
-                            missing_subtitles_list.remove([item[0], 'False', 'False'])
+                            missing_subtitles_list.remove({'language': item['language'],
+                                                           'forced': 'False',
+                                                           'hi': 'False'})
                         except ValueError:
                             pass
 
                 # make the missing languages list looks like expected
                 missing_subtitles_output_list = []
                 for item in missing_subtitles_list:
-                    lang = item[0]
-                    if item[1] == 'True':
+                    lang = item['language']
+                    if item['forced'] == 'True':
                         lang += ':forced'
-                    elif item[2] == 'True':
+                    elif item['hi'] == 'True':
                         lang += ':hi'
                     missing_subtitles_output_list.append(lang)
 
@@ -263,7 +274,10 @@ def list_missing_subtitles_movies(no=None, send_event=True, subtitles=None):
         event_stream(type='badges')
 
 
-def movies_full_scan_subtitles(use_cache=settings.radarr.use_ffprobe_cache):
+def movies_full_scan_subtitles(use_cache=None):
+    if use_cache is None:
+        use_cache = settings.radarr.use_ffprobe_cache
+
     movies = database.execute(
         select(TableMovies.path))\
         .all()
@@ -277,7 +291,11 @@ def movies_full_scan_subtitles(use_cache=settings.radarr.use_ffprobe_cache):
                       count=count_movies)
         store_subtitles_movie(movie.path, path_mappings.path_replace_movie(movie.path), use_cache=use_cache)
 
-    hide_progress(id='movies_disk_scan')
+    show_progress(id='movies_disk_scan',
+                  header='Full disk scan...',
+                  name='Movies subtitles',
+                  value=count_movies,
+                  count=count_movies)
 
     gc.collect()
 

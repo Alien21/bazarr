@@ -1,18 +1,19 @@
-import { Action, SimpleTable } from "@/components";
-import {
-  ProfileEditModal,
-  anyCutoff,
-} from "@/components/forms/ProfileEditForm";
-import { useModals } from "@/modules/modals";
-import { BuildKey, useArrayAction } from "@/utilities";
-import { faTrash, faWrench } from "@fortawesome/free-solid-svg-icons";
-import { Badge, Button, Group } from "@mantine/core";
-import { cloneDeep } from "lodash";
 import { FunctionComponent, useCallback, useMemo } from "react";
-import { Column } from "react-table";
+import { Badge, Button, Group } from "@mantine/core";
+import { faTrash, faWrench } from "@fortawesome/free-solid-svg-icons";
+import { ColumnDef } from "@tanstack/react-table";
+import { cloneDeep, includes, maxBy } from "lodash";
+import { Action } from "@/components";
+import {
+  anyCutoff,
+  ProfileEditModal,
+} from "@/components/forms/ProfileEditForm";
+import SimpleTable from "@/components/tables/SimpleTable";
+import { useModals } from "@/modules/modals";
+import { languageProfileKey } from "@/pages/Settings/keys";
+import { useFormActions } from "@/pages/Settings/utilities/FormValues";
+import { BuildKey, useArrayAction } from "@/utilities";
 import { useLatestEnabledLanguages, useLatestProfiles } from ".";
-import { languageProfileKey } from "../keys";
-import { useFormActions } from "../utilities/FormValues";
 
 const Table: FunctionComponent = () => {
   const profiles = useLatestProfiles();
@@ -23,7 +24,7 @@ const Table: FunctionComponent = () => {
     () =>
       1 +
       profiles.reduce<number>((val, prof) => Math.max(prof.profileId, val), 0),
-    [profiles]
+    [profiles],
   );
 
   const { setValue } = useFormActions();
@@ -34,12 +35,13 @@ const Table: FunctionComponent = () => {
     (list: Language.Profile[]) => {
       setValue(list, languageProfileKey, (value) => JSON.stringify(value));
     },
-    [setValue]
+    [setValue],
   );
 
   const updateProfile = useCallback(
     (profile: Language.Profile) => {
       const list = [...profiles];
+
       const idx = list.findIndex((v) => v.profileId === profile.profileId);
 
       if (idx !== -1) {
@@ -49,7 +51,7 @@ const Table: FunctionComponent = () => {
       }
       submitProfiles(list);
     },
-    [profiles, submitProfiles]
+    [profiles, submitProfiles],
   );
 
   const action = useArrayAction<Language.Profile>((fn) => {
@@ -57,24 +59,30 @@ const Table: FunctionComponent = () => {
     submitProfiles(fn(list));
   });
 
-  const columns = useMemo<Column<Language.Profile>[]>(
+  const columns = useMemo<ColumnDef<Language.Profile>[]>(
     () => [
       {
-        Header: "Name",
-        accessor: "name",
+        header: "Name",
+        accessorKey: "name",
       },
       {
-        Header: "Languages",
-        accessor: "items",
-        Cell: (row) => {
-          const items = row.value;
-          const cutoff = row.row.original.cutoff;
+        header: "Tag",
+        accessorKey: "tag",
+      },
+      {
+        header: "Languages",
+        accessorKey: "items",
+        cell: ({
+          row: {
+            original: { items, cutoff },
+          },
+        }) => {
           return (
-            <Group spacing="xs" noWrap>
-              {items.map((v) => {
+            <Group gap="xs" wrap="nowrap">
+              {items.map((v, i) => {
                 const isCutoff = v.id === cutoff || cutoff === anyCutoff;
                 return (
-                  <ItemBadge key={v.id} cutoff={isCutoff} item={v}></ItemBadge>
+                  <ItemBadge key={i} cutoff={isCutoff} item={v}></ItemBadge>
                 );
               })}
             </Group>
@@ -82,16 +90,19 @@ const Table: FunctionComponent = () => {
         },
       },
       {
-        Header: "Must contain",
-        accessor: "mustContain",
-        Cell: (row) => {
-          const items = row.value;
-          if (!items) {
+        header: "Must contain",
+        accessorKey: "mustContain",
+        cell: ({
+          row: {
+            original: { mustContain },
+          },
+        }) => {
+          if (!mustContain) {
             return null;
           }
           return (
             <>
-              {items.map((v, idx) => {
+              {mustContain.map((v, idx) => {
                 return (
                   <Badge key={BuildKey(idx, v)} color="gray">
                     {v}
@@ -103,16 +114,19 @@ const Table: FunctionComponent = () => {
         },
       },
       {
-        Header: "Must not contain",
-        accessor: "mustNotContain",
-        Cell: (row) => {
-          const items = row.value;
-          if (!items) {
+        header: "Must not contain",
+        accessorKey: "mustNotContain",
+        cell: ({
+          row: {
+            original: { mustNotContain },
+          },
+        }) => {
+          if (!mustNotContain) {
             return null;
           }
           return (
             <>
-              {items.map((v, idx) => {
+              {mustNotContain.map((v, idx) => {
                 return (
                   <Badge key={BuildKey(idx, v)} color="gray">
                     {v}
@@ -124,18 +138,55 @@ const Table: FunctionComponent = () => {
         },
       },
       {
-        accessor: "profileId",
-        Cell: ({ row }) => {
+        id: "profileId",
+        cell: ({ row }) => {
           const profile = row.original;
           return (
-            <Group spacing="xs" noWrap>
+            <Group gap="xs" wrap="nowrap">
               <Action
                 label="Edit Profile"
                 icon={faWrench}
+                c="gray"
                 onClick={() => {
+                  const lastId = maxBy(profile.items, "id")?.id || 0;
+
+                  // We once had an issue on the past where there were duplicated
+                  // item ids that needs to become unique upon editing.
+                  const sanitizedProfile = {
+                    ...cloneDeep(profile),
+                    items: profile.items.reduce(
+                      (acc, value) => {
+                        const { ids, duplicatedIds, items } = acc;
+
+                        // We once had an issue on the past where there were duplicated
+                        // item ids that needs to become unique upon editing.
+                        if (includes(ids, value.id)) {
+                          duplicatedIds.push(value.id);
+                          items.push({
+                            ...value,
+                            id: lastId + duplicatedIds.length,
+                          });
+
+                          return acc;
+                        }
+
+                        ids.push(value.id);
+                        items.push(value);
+
+                        return acc;
+                      },
+                      {
+                        ids: [] as number[],
+                        duplicatedIds: [] as number[],
+                        items: [] as typeof profile.items,
+                      },
+                    ).items,
+                    tag: profile.tag || undefined,
+                  };
+
                   modals.openContextModal(ProfileEditModal, {
                     languages,
-                    profile: cloneDeep(profile),
+                    profile: sanitizedProfile,
                     onComplete: updateProfile,
                   });
                 }}
@@ -143,7 +194,7 @@ const Table: FunctionComponent = () => {
               <Action
                 label="Remove"
                 icon={faTrash}
-                color="red"
+                c="red"
                 onClick={() => action.remove(row.index)}
               ></Action>
             </Group>
@@ -152,22 +203,22 @@ const Table: FunctionComponent = () => {
       },
     ],
     // TODO: Optimize this
-    [action, languages, modals, updateProfile]
+    [action, languages, modals, updateProfile],
   );
 
   const canAdd = languages.length !== 0;
 
   return (
     <>
-      <SimpleTable columns={columns} data={profiles}></SimpleTable>
+      <SimpleTable columns={columns} data={[...profiles]}></SimpleTable>
       <Button
         fullWidth
         disabled={!canAdd}
-        color="light"
         onClick={() => {
           const profile = {
             profileId: nextProfileId,
             name: "",
+            tag: undefined,
             items: [],
             cutoff: null,
             mustContain: [],

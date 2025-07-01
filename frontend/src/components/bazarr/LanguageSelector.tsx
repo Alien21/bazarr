@@ -1,7 +1,7 @@
+import { FunctionComponent, useMemo } from "react";
 import { useLanguages } from "@/apis/hooks";
 import { Selector, SelectorProps } from "@/components/inputs";
 import { useSelectorOptions } from "@/utilities";
-import { FunctionComponent, useMemo } from "react";
 
 interface LanguageSelectorProps
   extends Omit<SelectorProps<Language.Server>, "options" | "getkey"> {
@@ -25,7 +25,7 @@ const LanguageSelector: FunctionComponent<LanguageSelectorProps> = ({
   const options = useSelectorOptions(
     filteredData ?? [],
     (value) => value.name,
-    (value) => value.code3
+    (value) => value.code3,
   );
 
   return <Selector {...options} searchable {...selector}></Selector>;

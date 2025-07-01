@@ -1,13 +1,13 @@
-import { useMovieSubtitleModification } from "@/apis/hooks";
-import { useModals, withModal } from "@/modules/modals";
-import { TaskGroup, task } from "@/modules/task";
-import { useTableStyles } from "@/styles";
-import { useArrayAction, useSelectorOptions } from "@/utilities";
-import FormUtils from "@/utilities/form";
+import React, { FunctionComponent, useEffect, useMemo } from "react";
 import {
-  useLanguageProfileBy,
-  useProfileItemsToLanguages,
-} from "@/utilities/languages";
+  Button,
+  Divider,
+  MantineColor,
+  Select,
+  Stack,
+  Text,
+} from "@mantine/core";
+import { useForm } from "@mantine/form";
 import {
   faCheck,
   faCircleNotch,
@@ -16,21 +16,21 @@ import {
   faTrash,
 } from "@fortawesome/free-solid-svg-icons";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
+import { ColumnDef } from "@tanstack/react-table";
+import { isString, uniqBy } from "lodash";
+import { useMovieSubtitleModification } from "@/apis/hooks";
+import { subtitlesTypeOptions } from "@/components/forms/uploadFormSelectorTypes";
+import { Action, Selector } from "@/components/inputs";
+import SimpleTable from "@/components/tables/SimpleTable";
+import TextPopover from "@/components/TextPopover";
+import { useModals, withModal } from "@/modules/modals";
+import { task, TaskGroup } from "@/modules/task";
+import { useArrayAction, useSelectorOptions } from "@/utilities";
+import FormUtils from "@/utilities/form";
 import {
-  Button,
-  Checkbox,
-  Divider,
-  MantineColor,
-  Stack,
-  Text,
-} from "@mantine/core";
-import { useForm } from "@mantine/form";
-import { isString } from "lodash";
-import { FunctionComponent, useEffect, useMemo } from "react";
-import { Column } from "react-table";
-import TextPopover from "../TextPopover";
-import { Action, Selector } from "../inputs";
-import { SimpleTable } from "../tables";
+  useLanguageProfileBy,
+  useProfileItemsToLanguages,
+} from "@/utilities/languages";
 
 type SubtitleFile = {
   file: File;
@@ -47,7 +47,7 @@ type SubtitleValidateResult = {
 
 const validator = (
   movie: Item.Movie,
-  file: SubtitleFile
+  file: SubtitleFile,
 ): SubtitleValidateResult => {
   if (file.language === null) {
     return {
@@ -57,7 +57,7 @@ const validator = (
   } else {
     const { subtitles } = movie;
     const existing = subtitles.find(
-      (v) => v.code2 === file.language?.code2 && isString(v.path)
+      (v) => v.code2 === file.language?.code2 && isString(v.path),
     );
     if (existing !== undefined) {
       return {
@@ -89,14 +89,14 @@ const MovieUploadForm: FunctionComponent<Props> = ({
 
   const languages = useProfileItemsToLanguages(profile);
   const languageOptions = useSelectorOptions(
-    languages,
+    uniqBy(languages, "code2"),
     (v) => v.name,
-    (v) => v.code2
+    (v) => v.code2,
   );
 
   const defaultLanguage = useMemo(
     () => (languages.length > 0 ? languages[0] : null),
-    [languages]
+    [languages],
   );
 
   const form = useForm({
@@ -114,13 +114,13 @@ const MovieUploadForm: FunctionComponent<Props> = ({
         })),
     },
     validate: {
-      files: FormUtils.validation((values) => {
+      files: FormUtils.validation((values: SubtitleFile[]) => {
         return (
           values.find(
-            (v) =>
+            (v: SubtitleFile) =>
               v.language === null ||
               v.validateResult === undefined ||
-              v.validateResult.state === "error"
+              v.validateResult.state === "error",
           ) === undefined
         );
       }, "Some files cannot be uploaded, please check"),
@@ -144,94 +144,79 @@ const MovieUploadForm: FunctionComponent<Props> = ({
     });
   });
 
-  const columns = useMemo<Column<SubtitleFile>[]>(
+  const ValidateResultCell = ({
+    validateResult,
+  }: {
+    validateResult: SubtitleValidateResult | undefined;
+  }) => {
+    const icon = useMemo(() => {
+      switch (validateResult?.state) {
+        case "valid":
+          return faCheck;
+        case "warning":
+          return faInfoCircle;
+        case "error":
+          return faTimes;
+        default:
+          return faCircleNotch;
+      }
+    }, [validateResult?.state]);
+
+    const color = useMemo<MantineColor | undefined>(() => {
+      switch (validateResult?.state) {
+        case "valid":
+          return "green";
+        case "warning":
+          return "yellow";
+        case "error":
+          return "red";
+        default:
+          return undefined;
+      }
+    }, [validateResult?.state]);
+
+    return (
+      <TextPopover text={validateResult?.messages}>
+        <Text c={color} inline>
+          <FontAwesomeIcon icon={icon} />
+        </Text>
+      </TextPopover>
+    );
+  };
+
+  const columns = useMemo<ColumnDef<SubtitleFile>[]>(
     () => [
       {
-        accessor: "validateResult",
-        Cell: ({ cell: { value } }) => {
-          const icon = useMemo(() => {
-            switch (value?.state) {
-              case "valid":
-                return faCheck;
-              case "warning":
-                return faInfoCircle;
-              case "error":
-                return faTimes;
-              default:
-                return faCircleNotch;
-            }
-          }, [value?.state]);
-
-          const color = useMemo<MantineColor | undefined>(() => {
-            switch (value?.state) {
-              case "valid":
-                return "green";
-              case "warning":
-                return "yellow";
-              case "error":
-                return "red";
-              default:
-                return undefined;
-            }
-          }, [value?.state]);
-
-          return (
-            <TextPopover text={value?.messages}>
-              <Text color={color} inline>
-                <FontAwesomeIcon icon={icon}></FontAwesomeIcon>
-              </Text>
-            </TextPopover>
-          );
+        id: "validateResult",
+        cell: ({
+          row: {
+            original: { validateResult },
+          },
+        }) => {
+          return <ValidateResultCell validateResult={validateResult} />;
         },
       },
       {
-        Header: "File",
+        header: "File",
         id: "filename",
-        accessor: "file",
-        Cell: ({ value }) => {
-          const { classes } = useTableStyles();
-
-          return <Text className={classes.primary}>{value.name}</Text>;
+        accessorKey: "file",
+        cell: ({
+          row: {
+            original: { file },
+          },
+        }) => {
+          return <Text className="table-primary">{file.name}</Text>;
         },
       },
       {
-        Header: "Forced",
-        accessor: "forced",
-        Cell: ({ row: { original, index }, value }) => {
-          return (
-            <Checkbox
-              checked={value}
-              onChange={({ currentTarget: { checked } }) => {
-                action.mutate(index, { ...original, forced: checked });
-              }}
-            ></Checkbox>
-          );
-        },
-      },
-      {
-        Header: "HI",
-        accessor: "hi",
-        Cell: ({ row: { original, index }, value }) => {
-          return (
-            <Checkbox
-              checked={value}
-              onChange={({ currentTarget: { checked } }) => {
-                action.mutate(index, { ...original, hi: checked });
-              }}
-            ></Checkbox>
-          );
-        },
-      },
-      {
-        Header: "Language",
-        accessor: "language",
-        Cell: ({ row: { original, index }, value }) => {
-          const { classes } = useTableStyles();
+        header: "Language",
+        accessorKey: "language",
+        cell: ({ row: { original, index } }) => {
           return (
             <Selector
               {...languageOptions}
-              className={classes.select}
-              value={value}
+              className="table-long-break"
+              value={original.language}
               onChange={(item) => {
                 action.mutate(index, { ...original, language: item });
               }}
@@ -240,21 +225,75 @@ const MovieUploadForm: FunctionComponent<Props> = ({
         },
       },
       {
+        header: () => (
+          <Selector
+            options={subtitlesTypeOptions}
+            value={null}
+            placeholder="Type"
+            onChange={(value) => {
+              if (value) {
+                action.update((item) => {
+                  switch (value) {
+                    case "hi":
+                      return { ...item, hi: true, forced: false };
+                    case "forced":
+                      return { ...item, hi: false, forced: true };
+                    case "normal":
+                      return { ...item, hi: false, forced: false };
+                    default:
+                      return item;
+                  }
+                });
+              }
+            }}
+          ></Selector>
+        ),
+        accessorKey: "type",
+        cell: ({ row: { original, index } }) => {
+          return (
+            <Select
+              value={
+                subtitlesTypeOptions.find((s) => {
+                  if (original.hi) {
+                    return s.value === "hi";
+                  }
+
+                  if (original.forced) {
+                    return s.value === "forced";
+                  }
+
+                  return s.value === "normal";
+                })?.value
+              }
+              data={subtitlesTypeOptions}
+              onChange={(value) => {
+                if (value) {
+                  action.mutate(index, {
+                    ...original,
+                    hi: value === "hi",
+                    forced: value === "forced",
+                  });
+                }
+              }}
+            ></Select>
+          );
+        },
+      },
+      {
         id: "action",
-        accessor: "file",
-        Cell: ({ row: { index } }) => {
+        cell: ({ row: { index } }) => {
           return (
             <Action
               label="Remove"
               icon={faTrash}
-              color="red"
+              c="red"
               onClick={() => action.remove(index)}
             ></Action>
           );
         },
       },
     ],
-    [action, languageOptions]
+    [action, languageOptions],
   );
 
   const { upload } = useMovieSubtitleModification();
@@ -279,7 +318,7 @@ const MovieUploadForm: FunctionComponent<Props> = ({
         modals.closeSelf();
       })}
     >
-      <Stack>
+      <Stack className="table-long-break">
         <SimpleTable columns={columns} data={form.values.files}></SimpleTable>
         <Divider></Divider>
         <Button type="submit">Upload</Button>
@@ -294,7 +333,7 @@ export const MovieUploadModal = withModal(
   {
     title: "Upload Subtitles",
     size: "xl",
-  }
+  },
 );
 
 export default MovieUploadForm;

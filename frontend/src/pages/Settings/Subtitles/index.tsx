@@ -1,5 +1,5 @@
-import { Code, Table } from "@mantine/core";
-import { FunctionComponent } from "react";
+import React, { FunctionComponent } from "react";
+import { Code, Space, Table, Text as MantineText } from "@mantine/core";
 import {
   Check,
   CollapseBox,
@@ -10,11 +10,11 @@ import {
   Selector,
   Slider,
   Text,
-} from "../components";
+} from "@/pages/Settings/components";
 import {
   SubzeroColorModification,
   SubzeroModification,
-} from "../utilities/modifications";
+} from "@/pages/Settings/utilities/modifications";
 import {
   adaptiveSearchingDelayOption,
   adaptiveSearchingDeltaOption,
@@ -115,26 +115,28 @@ const commandOptions: CommandOption[] = [
   },
 ];
 
-const commandOptionElements: JSX.Element[] = commandOptions.map((op, idx) => (
-  <tr key={idx}>
-    <td>
-      <Code>{op.option}</Code>
-    </td>
-    <td>{op.description}</td>
-  </tr>
-));
+const commandOptionElements: React.JSX.Element[] = commandOptions.map(
+  (op, idx) => (
+    <tr key={idx}>
+      <td>
+        <Code>{op.option}</Code>
+      </td>
+      <td>{op.description}</td>
+    </tr>
+  ),
+);
 
 const SettingsSubtitlesView: FunctionComponent = () => {
   return (
     <Layout name="Subtitles">
-      <Section header="Basic Options">
+      <Section header="Subtitle File Options">
         <Selector
           label="Subtitle Folder"
           options={folderOptions}
           settingKey="settings-general-subfolder"
         ></Selector>
         <Message>
-          Choose the folder you wish to store/read the subtitles
+          Choose the folder you wish to store/read the subtitles.
         </Message>
         <CollapseBox
           settingKey="settings-general-subfolder"
@@ -154,14 +156,33 @@ const SettingsSubtitlesView: FunctionComponent = () => {
           What file extension to use when saving hearing-impaired subtitles to
           disk (e.g., video.en.sdh.srt).
         </Message>
-      </Section>
-      <Section header="Embedded Subtitles">
         <Check
-          label="Use Embedded Subtitles"
+          label="Encode Subtitles To UTF-8"
+          settingKey="settings-general-utf8_encode"
+        ></Check>
+        <Message>
+          Re-encode downloaded subtitles to UTF-8. Should be left enabled in
+          most cases.
+        </Message>
+        <Check
+          label="Change Subtitle File Permission After Download (chmod)"
+          settingKey="settings-general-chmod_enabled"
+        ></Check>
+        <CollapseBox indent settingKey="settings-general-chmod_enabled">
+          <Text placeholder="0777" settingKey="settings-general-chmod"></Text>
+          <Message>
+            Must be a 4 digit octal number. Only for non-Windows systems.
+          </Message>
+        </CollapseBox>
+      </Section>
+      <Section header="Embedded Subtitles Handling">
+        <Check
+          label="Treat Embedded Subtitles as Downloaded"
           settingKey="settings-general-use_embedded_subs"
         ></Check>
         <Message>
-          Use embedded subtitles in media files when determining missing ones.
+          Treat embedded subtitles in media files as already downloaded when
+          determining missing ones.
         </Message>
         <CollapseBox indent settingKey="settings-general-use_embedded_subs">
           <Selector
@@ -171,34 +192,34 @@ const SettingsSubtitlesView: FunctionComponent = () => {
             }}
             options={embeddedSubtitlesParserOption}
           ></Selector>
-          <Message>Embedded subtitles video parser</Message>
+          <Message>Embedded Subtitles video parser.</Message>
           <Check
             label="Ignore Embedded PGS Subtitles"
             settingKey="settings-general-ignore_pgs_subs"
           ></Check>
           <Message>
-            Ignores PGS Subtitles in Embedded Subtitles detection.
+            Ignore PGS Subtitles when detecting embedded subtitles.
           </Message>
           <Check
             label="Ignore Embedded VobSub Subtitles"
             settingKey="settings-general-ignore_vobsub_subs"
           ></Check>
           <Message>
-            Ignores VobSub Subtitles in Embedded Subtitles detection.
+            Ignore VobSub Subtitles when detecting embedded subtitles.
           </Message>
           <Check
             label="Ignore Embedded ASS Subtitles"
             settingKey="settings-general-ignore_ass_subs"
           ></Check>
           <Message>
-            Ignores ASS Subtitles in Embedded Subtitles detection.
+            Ignore ASS Subtitles when detecting embedded subtitles.
           </Message>
           <Check
             label="Show Only Desired Languages"
             settingKey="settings-general-embedded_subs_show_desired"
           ></Check>
           <Message>
-            Hide embedded subtitles for languages that are not currently
+            Hide Embedded Subtitles for languages that are not currently
             desired.
           </Message>
         </CollapseBox>
@@ -218,7 +239,7 @@ const SettingsSubtitlesView: FunctionComponent = () => {
             mb="lg"
           ></Slider>
           <Message>
-            Number of days to go back in history to upgrade subtitles
+            Number of days to go back in history to upgrade subtitles.
           </Message>
           <Check
             label="Upgrade Manually Downloaded or Translated Subtitles"
@@ -228,26 +249,6 @@ const SettingsSubtitlesView: FunctionComponent = () => {
             Enable or disable upgrade of manually downloaded or translated
             subtitles.
           </Message>
-        </CollapseBox>
-      </Section>
-      <Section header="Encoding">
-        <Check
-          label="Encode Subtitles To UTF8"
-          settingKey="settings-general-utf8_encode"
-        ></Check>
-        <Message>
-          Re-encode downloaded Subtitles to UTF8. Should be left enabled in most
-          case.
-        </Message>
-      </Section>
-      <Section header="Permissions">
-        <Check
-          label="Change file permission (chmod)"
-          settingKey="settings-general-chmod_enabled"
-        ></Check>
-        <CollapseBox indent settingKey="settings-general-chmod_enabled">
-          <Text placeholder="0777" settingKey="settings-general-chmod"></Text>
-          <Message>Must be 4 digit octal</Message>
         </CollapseBox>
       </Section>
       <Section header="Performance / Optimization">
@@ -266,9 +267,9 @@ const SettingsSubtitlesView: FunctionComponent = () => {
             options={adaptiveSearchingDelayOption}
           ></Selector>
           <Message>
-            The delay from the first search to adaptive searching applying.
-            During this window Bazarr will continue to search for subtitles,
-            even if they have been searched for recently.
+            The delay from the first search to adaptive searching taking effect.
+            During this time window Bazarr will continue to search for
+            subtitles, even if they have been searched for recently.
           </Message>
           <Selector
             settingKey="settings-general-adaptive_searching_delta"
@@ -286,20 +287,24 @@ const SettingsSubtitlesView: FunctionComponent = () => {
           settingKey="settings-general-multithreading"
         ></Check>
         <Message>
-          Search multiple providers at once (Don't choose this on low powered
-          devices)
+          Search multiple providers at once. (Don't choose this on low powered
+          devices).
         </Message>
         <Check
           label="Skip video file hash calculation"
           settingKey="settings-general-skip_hashing"
         ></Check>
         <Message>
-          Skip video file hashing during search process to prevent sleeping hard
-          disk drive from waking-up. On the other hand, this may decrease your
-          search results scores.
+          Skip video file hashing during search process to prevent a sleeping
+          hard disk drive from waking up. However, this may decrease your search
+          results scores.
         </Message>
       </Section>
-      <Section header="Subzero Modifications">
+      <Section header="Sub-Zero Subtitle Content Modifications">
+        <Message>
+          After downloaded, content of the subtitles will be modified based on
+          options selected below.
+        </Message>
         <Check
           label="Hearing Impaired"
           settingOptions={{ onLoaded: SubzeroModification("remove_HI") }}
@@ -368,17 +373,17 @@ const SettingsSubtitlesView: FunctionComponent = () => {
           playback devices.
         </Message>
       </Section>
-      <Section header="Synchronizarion / Alignement">
+      <Section header="Audio Synchronization / Alignment">
         <Check
           label="Always use Audio Track as Reference for Syncing"
           settingKey="settings-subsync-force_audio"
         ></Check>
         <Message>
-          Use the audio track as reference for syncing, instead of using the
-          embedded subtitle.
+          Use the audio track as reference for syncing, instead of the embedded
+          subtitle.
         </Message>
         <Check
-          label="No Fix Framerate"
+          label="Do Not Fix Framerate Mismatch"
           settingKey="settings-subsync-no_fix_framerate"
         ></Check>
         <Message>
@@ -386,7 +391,7 @@ const SettingsSubtitlesView: FunctionComponent = () => {
           between reference and subtitles.
         </Message>
         <Check
-          label="Gold-Section Search"
+          label="Golden-Section Search"
           settingKey="settings-subsync-gss"
         ></Check>
         <Message>
@@ -394,7 +399,7 @@ const SettingsSubtitlesView: FunctionComponent = () => {
           framerate ratio between video and subtitles.
         </Message>
         <Selector
-          label="Max offset seconds"
+          label="Max Offset Seconds"
           options={syncMaxOffsetSecondsOptions}
           settingKey="settings-subsync-max_offset_seconds"
           defaultValue={60}
@@ -403,12 +408,11 @@ const SettingsSubtitlesView: FunctionComponent = () => {
           The max allowed offset seconds for any subtitle segment.
         </Message>
         <Check
-          label="Automatic Subtitles Synchronization"
+          label="Automatic Subtitles Audio Synchronization"
           settingKey="settings-subsync-use_subsync"
         ></Check>
         <Message>
-          Enable the automatic subtitles synchronization after downloading a
-          subtitles.
+          Enable automatic audio synchronization after downloading subtitles.
         </Message>
         <CollapseBox indent settingKey="settings-subsync-use_subsync">
           <MultiSelector
@@ -425,49 +429,94 @@ const SettingsSubtitlesView: FunctionComponent = () => {
             the media file.
           </Message>
           <Check
-            label="Series Score Threshold"
+            label="Series Score Threshold For Audio Sync"
             settingKey="settings-subsync-use_subsync_threshold"
           ></Check>
-          <CollapseBox settingKey="settings-subsync-use_subsync_threshold">
+          <CollapseBox
+            indent
+            settingKey="settings-subsync-use_subsync_threshold"
+          >
             <Slider settingKey="settings-subsync-subsync_threshold"></Slider>
+            <Space />
+            <Message>
+              Only series subtitles with scores{" "}
+              <MantineText fw={700} span>
+                below
+              </MantineText>{" "}
+              this value will be automatically synchronized.
+            </Message>
           </CollapseBox>
           <Check
-            label="Movies Score Threshold"
+            label="Movies Score Threshold For Audio Sync"
             settingKey="settings-subsync-use_subsync_movie_threshold"
           ></Check>
-          <CollapseBox settingKey="settings-subsync-use_subsync_movie_threshold">
+          <CollapseBox
+            indent
+            settingKey="settings-subsync-use_subsync_movie_threshold"
+          >
             <Slider settingKey="settings-subsync-subsync_movie_threshold"></Slider>
+            <Space />
+            <Message>
+              Only movie subtitles with scores{" "}
+              <MantineText fw={700} span>
+                below
+              </MantineText>{" "}
+              this value will be automatically synchronized.
+            </Message>
           </CollapseBox>
         </CollapseBox>
       </Section>
-      <Section header="Custom post-processing">
+      <Section header="Custom Post-Processing">
         <Check
           settingKey="settings-general-use_postprocessing"
           label="Custom Post-Processing"
         ></Check>
         <Message>
-          Enable the post-processing execution after downloading a subtitles.
+          Enable automatic execution of the post-processing command specified
+          below after downloading a subtitle.
         </Message>
         <CollapseBox indent settingKey="settings-general-use_postprocessing">
           <Check
             settingKey="settings-general-use_postprocessing_threshold"
-            label="Series Score Threshold"
+            label="Series Score Threshold For Post-Processing"
           ></Check>
-          <CollapseBox settingKey="settings-general-use_postprocessing_threshold">
+          <CollapseBox
+            indent
+            settingKey="settings-general-use_postprocessing_threshold"
+          >
             <Slider settingKey="settings-general-postprocessing_threshold"></Slider>
+            <Space />
+            <Message>
+              Only series subtitles with scores{" "}
+              <MantineText fw={700} span>
+                below
+              </MantineText>{" "}
+              this value will be automatically post-processed.
+            </Message>
           </CollapseBox>
           <Check
             settingKey="settings-general-use_postprocessing_threshold_movie"
-            label="Movies Score Threshold"
+            label="Movies Score Threshold For Post-Processing"
           ></Check>
-          <CollapseBox settingKey="settings-general-use_postprocessing_threshold_movie">
+          <CollapseBox
+            indent
+            settingKey="settings-general-use_postprocessing_threshold_movie"
+          >
             <Slider settingKey="settings-general-postprocessing_threshold_movie"></Slider>
+            <Space />
+            <Message>
+              Only movie subtitles with scores{" "}
+              <MantineText fw={700} span>
+                below
+              </MantineText>{" "}
+              this value will be automatically post-processed.
+            </Message>
           </CollapseBox>
           <Text
             label="Command"
             settingKey="settings-general-postprocessing_cmd"
           ></Text>
-          <Table highlightOnHover fontSize="sm">
+          <Table highlightOnHover fs="sm">
             <tbody>{commandOptionElements}</tbody>
           </Table>
         </CollapseBox>

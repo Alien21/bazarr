@@ -1,15 +1,16 @@
+import { FunctionComponent, useCallback, useMemo } from "react";
+import { Button, Checkbox } from "@mantine/core";
+import { faEquals, faTrash } from "@fortawesome/free-solid-svg-icons";
+import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
+import { ColumnDef } from "@tanstack/react-table";
 import { useLanguages } from "@/apis/hooks";
-import { Action, SimpleTable } from "@/components";
+import { Action } from "@/components";
 import LanguageSelector from "@/components/bazarr/LanguageSelector";
+import SimpleTable from "@/components/tables/SimpleTable";
 import { languageEqualsKey } from "@/pages/Settings/keys";
 import { useFormActions } from "@/pages/Settings/utilities/FormValues";
 import { useSettingValue } from "@/pages/Settings/utilities/hooks";
 import { LOG } from "@/utilities/console";
-import { faEquals, faTrash } from "@fortawesome/free-solid-svg-icons";
-import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
-import { Button, Checkbox } from "@mantine/core";
-import { FunctionComponent, useCallback, useMemo } from "react";
-import { Column } from "react-table";
 
 interface GenericEqualTarget<T> {
   content: T;
@@ -28,7 +29,7 @@ export type LanguageEqualImmediateData =
 export type LanguageEqualData = LanguageEqualGenericData<Language.Server>;
 
 function decodeEqualTarget(
-  text: string
+  text: string,
 ): GenericEqualTarget<Language.CodeType> | undefined {
   const [code, decoration] = text.split("@");
 
@@ -47,7 +48,7 @@ function decodeEqualTarget(
 }
 
 export function decodeEqualData(
-  text: string
+  text: string,
 ): LanguageEqualImmediateData | undefined {
   const [first, second] = text.split(":");
 
@@ -97,10 +98,10 @@ export function useLatestLanguageEquals(): LanguageEqualData[] {
           }
 
           const source = data?.find(
-            (value) => value.code3 === parsed.source.content
+            (value) => value.code3 === parsed.source.content,
           );
           const target = data?.find(
-            (value) => value.code3 === parsed.target.content
+            (value) => value.code3 === parsed.target.content,
           );
 
           if (source === undefined || target === undefined) {
@@ -113,7 +114,7 @@ export function useLatestLanguageEquals(): LanguageEqualData[] {
           };
         })
         .filter((v): v is LanguageEqualData => v !== undefined) ?? [],
-    [data, latest]
+    [data, latest],
   );
 }
 
@@ -134,7 +135,7 @@ const EqualsTable: FunctionComponent<EqualsTableProps> = () => {
       LOG("info", "updating language equals data", values);
       setValue(encodedValues, languageEqualsKey);
     },
-    [setValue]
+    [setValue],
   );
 
   const add = useCallback(() => {
@@ -178,7 +179,7 @@ const EqualsTable: FunctionComponent<EqualsTableProps> = () => {
       newValue[index] = { ...value };
       setEquals(newValue);
     },
-    [equals, setEquals]
+    [equals, setEquals],
   );
 
   const remove = useCallback(
@@ -193,25 +194,25 @@ const EqualsTable: FunctionComponent<EqualsTableProps> = () => {
 
       setEquals(newValue);
     },
-    [equals, setEquals]
+    [equals, setEquals],
   );
 
-  const columns = useMemo<Column<LanguageEqualData>[]>(
+  const columns = useMemo<ColumnDef<LanguageEqualData>[]>(
     () => [
       {
-        Header: "Source",
+        header: "Source",
         id: "source-lang",
-        accessor: "source",
-        Cell: ({ value: { content }, row }) => {
+        accessorKey: "source",
+        cell: ({ row: { original, index } }) => {
           return (
             <LanguageSelector
               enabled
-              value={content}
+              value={original.source.content}
               onChange={(result) => {
                 if (result !== null) {
-                  update(row.index, {
-                    ...row.original,
-                    source: { ...row.original.source, content: result },
+                  update(index, {
+                    ...original,
+                    source: { ...original.source, content: result },
                   });
                 }
               }}
@@ -221,12 +222,11 @@ const EqualsTable: FunctionComponent<EqualsTableProps> = () => {
       },
       {
         id: "source-hi",
-        accessor: "source",
-        Cell: ({ value: { hi }, row }) => {
+        cell: ({ row }) => {
           return (
             <Checkbox
               label="HI"
-              checked={hi}
+              checked={row.original.source.hi}
               onChange={({ currentTarget: { checked } }) => {
                 update(row.index, {
                   ...row.original,
@@ -243,12 +243,11 @@ const EqualsTable: FunctionComponent<EqualsTableProps> = () => {
       },
       {
         id: "source-forced",
-        accessor: "source",
-        Cell: ({ value: { forced }, row }) => {
+        cell: ({ row }) => {
           return (
             <Checkbox
               label="Forced"
-              checked={forced}
+              checked={row.original.source.forced}
               onChange={({ currentTarget: { checked } }) => {
                 update(row.index, {
                   ...row.original,
@@ -265,19 +264,18 @@ const EqualsTable: FunctionComponent<EqualsTableProps> = () => {
       },
       {
         id: "equal-icon",
-        Cell: () => {
+        cell: () => {
           return <FontAwesomeIcon icon={faEquals} />;
         },
       },
       {
-        Header: "Target",
+        header: "Target",
         id: "target-lang",
-        accessor: "target",
-        Cell: ({ value: { content }, row }) => {
+        cell: ({ row }) => {
           return (
             <LanguageSelector
               enabled
-              value={content}
+              value={row.original.target.content}
               onChange={(result) => {
                 if (result !== null) {
                   update(row.index, {
@@ -292,12 +290,11 @@ const EqualsTable: FunctionComponent<EqualsTableProps> = () => {
       },
       {
         id: "target-hi",
-        accessor: "target",
-        Cell: ({ value: { hi }, row }) => {
+        cell: ({ row }) => {
           return (
             <Checkbox
               label="HI"
-              checked={hi}
+              checked={row.original.target.hi}
               onChange={({ currentTarget: { checked } }) => {
                 update(row.index, {
                   ...row.original,
@@ -314,12 +311,11 @@ const EqualsTable: FunctionComponent<EqualsTableProps> = () => {
       },
       {
         id: "target-forced",
-        accessor: "target",
-        Cell: ({ value: { forced }, row }) => {
+        cell: ({ row }) => {
           return (
             <Checkbox
               label="Forced"
-              checked={forced}
+              checked={row.original.target.forced}
               onChange={({ currentTarget: { checked } }) => {
                 update(row.index, {
                   ...row.original,
@@ -336,26 +332,25 @@ const EqualsTable: FunctionComponent<EqualsTableProps> = () => {
       },
       {
         id: "action",
-        accessor: "target",
-        Cell: ({ row }) => {
+        cell: ({ row }) => {
           return (
             <Action
               label="Remove"
               icon={faTrash}
-              color="red"
+              c="red"
               onClick={() => remove(row.index)}
             ></Action>
           );
         },
       },
     ],
-    [remove, update]
+    [remove, update],
   );
 
   return (
     <>
       <SimpleTable data={equals} columns={columns}></SimpleTable>
-      <Button fullWidth disabled={!canAdd} color="light" onClick={add}>
+      <Button fullWidth disabled={!canAdd} onClick={add}>
         {canAdd ? "Add Equal" : "No Enabled Languages"}
       </Button>
     </>

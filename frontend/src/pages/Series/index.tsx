@@ -1,102 +1,117 @@
+import { FunctionComponent, useMemo } from "react";
+import { Link } from "react-router";
+import { Anchor, Container, Group, Progress } from "@mantine/core";
+import { useDocumentTitle } from "@mantine/hooks";
+import { faBookmark as farBookmark } from "@fortawesome/free-regular-svg-icons";
+import {
+  faBookmark,
+  faPlay,
+  faStop,
+  faWrench,
+} from "@fortawesome/free-solid-svg-icons";
+import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
+import { ColumnDef } from "@tanstack/react-table";
 import { useSeriesModification, useSeriesPagination } from "@/apis/hooks";
 import { Action } from "@/components";
-import { AudioList } from "@/components/bazarr";
 import LanguageProfileName from "@/components/bazarr/LanguageProfile";
 import { ItemEditModal } from "@/components/forms/ItemEditForm";
 import { useModals } from "@/modules/modals";
 import ItemView from "@/pages/views/ItemView";
-import { useTableStyles } from "@/styles";
-import { faBookmark as farBookmark } from "@fortawesome/free-regular-svg-icons";
-import { faBookmark, faWrench } from "@fortawesome/free-solid-svg-icons";
-import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
-import { Anchor, Container, Progress } from "@mantine/core";
-import { useDocumentTitle } from "@mantine/hooks";
-import { FunctionComponent, useMemo } from "react";
-import { Link } from "react-router-dom";
-import { Column } from "react-table";
 
 const SeriesView: FunctionComponent = () => {
   const mutation = useSeriesModification();
 
   const query = useSeriesPagination();
 
-  const columns: Column<Item.Series>[] = useMemo<Column<Item.Series>[]>(
+  const modals = useModals();
+
+  const columns = useMemo<ColumnDef<Item.Series>[]>(
     () => [
       {
-        accessor: "monitored",
-        Cell: ({ value }) => (
-          <FontAwesomeIcon
-            title={value ? "monitored" : "unmonitored"}
-            icon={value ? faBookmark : farBookmark}
-          ></FontAwesomeIcon>
+        id: "status",
+        cell: ({ row: { original } }) => (
+          <Group gap="xs" wrap="nowrap">
+            <FontAwesomeIcon
+              title={original.monitored ? "monitored" : "unmonitored"}
+              icon={original.monitored ? faBookmark : farBookmark}
+            ></FontAwesomeIcon>
+
+            <FontAwesomeIcon
+              title={original.ended ? "Ended" : "Continuing"}
+              icon={original.ended ? faStop : faPlay}
+            ></FontAwesomeIcon>
+          </Group>
         ),
       },
       {
-        Header: "Name",
-        accessor: "title",
-        Cell: ({ row, value }) => {
-          const { classes } = useTableStyles();
-          const target = `/series/${row.original.sonarrSeriesId}`;
+        header: "Name",
+        accessorKey: "title",
+        cell: ({ row: { original } }) => {
+          const target = `/series/${original.sonarrSeriesId}`;
           return (
-            <Anchor className={classes.primary} component={Link} to={target}>
-              {value}
+            <Anchor className="table-primary" component={Link} to={target}>
+              {original.title}
             </Anchor>
           );
         },
       },
       {
-        Header: "Audio",
-        accessor: "audio_language",
-        Cell: ({ value }) => {
-          return <AudioList audios={value}></AudioList>;
-        },
-      },
-      {
-        Header: "Languages Profile",
-        accessor: "profileId",
-        Cell: ({ value }) => {
+        header: "Languages Profile",
+        accessorKey: "profileId",
+        cell: ({ row: { original } }) => {
           return (
-            <LanguageProfileName index={value} empty=""></LanguageProfileName>
+            <LanguageProfileName
+              index={original.profileId}
+              empty=""
+            ></LanguageProfileName>
           );
         },
       },
       {
-        Header: "Episodes",
-        accessor: "episodeFileCount",
-        Cell: (row) => {
+        header: "Episodes",
+        accessorKey: "episodeFileCount",
+        cell: (row) => {
           const { episodeFileCount, episodeMissingCount, profileId, title } =
             row.row.original;
-          let progress = 0;
-          let label = "";
-          if (episodeFileCount === 0 || !profileId) {
-            progress = 0.0;
-          } else {
-            progress = (1.0 - episodeMissingCount / episodeFileCount) * 100.0;
-            label = `${
-              episodeFileCount - episodeMissingCount
-            }/${episodeFileCount}`;
-          }
 
+          const label = `${episodeFileCount - episodeMissingCount}/${episodeFileCount}`;
           return (
-            <Progress
-              key={title}
-              size="xl"
-              color={episodeMissingCount === 0 ? "brand" : "yellow"}
-              value={progress}
-              label={label}
-            ></Progress>
+            <Progress.Root key={title} size="xl">
+              <Progress.Section
+                value={
+                  episodeFileCount === 0 || !profileId
+                    ? 0
+                    : (1.0 - episodeMissingCount / episodeFileCount) * 100.0
+                }
+                color={episodeMissingCount === 0 ? "brand" : "yellow"}
+              >
+                <Progress.Label>{label}</Progress.Label>
+              </Progress.Section>
+              {episodeMissingCount === episodeFileCount && (
+                <Progress.Label
+                  styles={{
+                    label: {
+                      position: "absolute",
+                      top: "3px",
+                      left: "50%",
+                      transform: "translateX(-50%)",
+                    },
+                  }}
+                >
+                  {label}
+                </Progress.Label>
+              )}
+            </Progress.Root>
           );
         },
       },
       {
-        accessor: "sonarrSeriesId",
-        Cell: ({ row: { original } }) => {
-          const modals = useModals();
+        id: "sonarrSeriesId",
+        cell: ({ row: { original } }) => {
           return (
             <Action
               label="Edit Series"
               tooltip={{ position: "left" }}
-              variant="light"
               onClick={() =>
                 modals.openContextModal(
                   ItemEditModal,
@@ -106,7 +121,7 @@ const SeriesView: FunctionComponent = () => {
                   },
                   {
                     title: original.title,
-                  }
+                  },
                 )
               }
               icon={faWrench}
@@ -115,7 +130,7 @@ const SeriesView: FunctionComponent = () => {
         },
       },
     ],
-    [mutation]
+    [mutation, modals],
   );
 
   useDocumentTitle("Series - Bazarr");

@@ -28,7 +28,7 @@ from ..operations import Operations
 from ..util import sqla_compat
 from ..util.sqla_compat import create_mock_engine
 from ..util.sqla_compat import sqla_14
-from ..util.sqla_compat import sqla_1x
+from ..util.sqla_compat import sqla_2
 
 
 testing_config = configparser.ConfigParser()
@@ -36,10 +36,7 @@ testing_config.read(["test.cfg"])
 
 
 class TestBase(SQLAlchemyTestBase):
-    if sqla_1x:
-        is_sqlalchemy_future = False
-    else:
-        is_sqlalchemy_future = True
+    is_sqlalchemy_future = sqla_2
 
     @testing.fixture()
     def ops_context(self, migration_context):
@@ -50,6 +47,12 @@ class TestBase(SQLAlchemyTestBase):
     def migration_context(self, connection):
         return MigrationContext.configure(
             connection, opts=dict(transaction_per_migration=True)
+        )
+
+    @testing.fixture
+    def as_sql_migration_context(self, connection):
+        return MigrationContext.configure(
+            connection, opts=dict(transaction_per_migration=True, as_sql=True)
         )
 
     @testing.fixture
@@ -137,7 +140,6 @@ def op_fixture(
     literal_binds=False,
     native_boolean=None,
 ):
-
     opts = {}
     if naming_convention:
         opts["target_metadata"] = MetaData(naming_convention=naming_convention)
@@ -220,7 +222,6 @@ def op_fixture(
 
 
 class AlterColRoundTripFixture:
-
     # since these tests are about syntax, use more recent SQLAlchemy as some of
     # the type / server default compare logic might not work on older
     # SQLAlchemy versions as seems to be the case for SQLAlchemy 1.1 on Oracle
@@ -273,9 +274,11 @@ class AlterColRoundTripFixture:
                 "x",
                 column.name,
                 existing_type=column.type,
-                existing_server_default=column.server_default
-                if column.server_default is not None
-                else False,
+                existing_server_default=(
+                    column.server_default
+                    if column.server_default is not None
+                    else False
+                ),
                 existing_nullable=True if column.nullable else False,
                 # existing_comment=column.comment,
                 nullable=to_.get("nullable", None),
@@ -303,9 +306,13 @@ class AlterColRoundTripFixture:
             new_col["type"],
             new_col.get("default", None),
             compare.get("type", old_col["type"]),
-            compare["server_default"].text
-            if "server_default" in compare
-            else column.server_default.arg.text
-            if column.server_default is not None
-            else None,
+            (
+                compare["server_default"].text
+                if "server_default" in compare
+                else (
+                    column.server_default.arg.text
+                    if column.server_default is not None
+                    else None
+                )
+            ),
         )

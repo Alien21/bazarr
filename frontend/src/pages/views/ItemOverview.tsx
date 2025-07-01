@@ -1,23 +1,4 @@
-import { Language } from "@/components/bazarr";
-import { BuildKey } from "@/utilities";
-import {
-  useLanguageProfileBy,
-  useProfileItemsToLanguages,
-} from "@/utilities/languages";
-import {
-  faFolder,
-  faBookmark as farBookmark,
-} from "@fortawesome/free-regular-svg-icons";
-import {
-  IconDefinition,
-  faBookmark,
-  faClone,
-  faLanguage,
-  faMusic,
-  faStream,
-  faTags,
-} from "@fortawesome/free-solid-svg-icons";
-import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
+import React, { FunctionComponent, useMemo } from "react";
 import {
   BackgroundImage,
   Badge,
@@ -28,46 +9,64 @@ import {
   HoverCard,
   Image,
   List,
-  MediaQuery,
   Stack,
   Text,
   Title,
-  createStyles,
+  Tooltip,
 } from "@mantine/core";
-import { FunctionComponent, useMemo } from "react";
+import {
+  faBookmark as farBookmark,
+  faFolder,
+} from "@fortawesome/free-regular-svg-icons";
+import {
+  faBookmark,
+  faClone,
+  faLanguage,
+  faMusic,
+  faStream,
+  faTags,
+  IconDefinition,
+} from "@fortawesome/free-solid-svg-icons";
+import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
+import { Language } from "@/components/bazarr";
+import { BuildKey } from "@/utilities";
+import {
+  normalizeAudioLanguage,
+  useLanguageProfileBy,
+  useProfileItemsToLanguages,
+} from "@/utilities/languages";
 
 interface Props {
   item: Item.Base | null;
   details?: { icon: IconDefinition; text: string }[];
 }
 
-const useStyles = createStyles((theme) => {
-  return {
-    poster: {
-      maxWidth: "250px",
-    },
-    col: {
-      maxWidth: "100%",
-    },
-    group: {
-      maxWidth: "100%",
-    },
-  };
-});
-
 const ItemOverview: FunctionComponent<Props> = (props) => {
   const { item, details } = props;
 
-  const { classes } = useStyles();
-
   const detailBadges = useMemo(() => {
-    const badges: (JSX.Element | null)[] = [];
+    const badges: (React.JSX.Element | null)[] = [];
 
     if (item) {
       badges.push(
-        <ItemBadge key="file-path" icon={faFolder} title="File Path">
-          {item.path}
-        </ItemBadge>
+        <ItemBadge
+          key="file-path"
+          icon={faFolder}
+          title="File Path"
+          styles={{
+            root: { overflow: "unset" },
+            label: { overflow: "hidden" },
+          }}
+        >
+          <Tooltip
+            label={item.path}
+            multiline
+            style={{ overflowWrap: "anywhere" }}
+            events={{ hover: true, focus: false, touch: true }}
+          >
+            <span>{item.path}</span>
+          </Tooltip>
+        </ItemBadge>,
       );
 
       badges.push(
@@ -75,14 +74,14 @@ const ItemOverview: FunctionComponent<Props> = (props) => {
           <ItemBadge key={BuildKey(idx, "detail", val.text)} icon={val.icon}>
             {val.text}
           </ItemBadge>
-        )) ?? [])
+        )) ?? []),
       );
 
       if (item.tags.length > 0) {
         badges.push(
           <ItemBadge key="tags" icon={faTags} title="Tags">
             {item.tags.join("|")}
-          </ItemBadge>
+          </ItemBadge>,
         );
       }
     }
@@ -98,17 +97,17 @@ const ItemOverview: FunctionComponent<Props> = (props) => {
           icon={faMusic}
           title="Audio Language"
         >
-          {v.name}
+          {normalizeAudioLanguage(v.name)}
         </ItemBadge>
       )) ?? [],
-    [item?.audio_language]
+    [item?.audio_language],
   );
 
   const profile = useLanguageProfileBy(item?.profileId);
   const profileItems = useProfileItemsToLanguages(profile);
 
   const languageBadges = useMemo(() => {
-    const badges: (JSX.Element | null)[] = [];
+    const badges: (React.JSX.Element | null)[] = [];
 
     if (profile) {
       badges.push(
@@ -118,7 +117,7 @@ const ItemOverview: FunctionComponent<Props> = (props) => {
           title="Languages Profile"
         >
           {profile.name}
-        </ItemBadge>
+        </ItemBadge>,
       );
 
       badges.push(
@@ -130,7 +129,7 @@ const ItemOverview: FunctionComponent<Props> = (props) => {
           >
             <Language.Text long value={v}></Language.Text>
           </ItemBadge>
-        ))
+        )),
       );
     }
 
@@ -147,24 +146,19 @@ const ItemOverview: FunctionComponent<Props> = (props) => {
         m={0}
         style={{
           backgroundColor: "rgba(0,0,0,0.7)",
-          flexWrap: "nowrap",
+        }}
+        styles={{
+          inner: { flexWrap: "nowrap" },
         }}
       >
-        <MediaQuery smallerThan="sm" styles={{ display: "none" }}>
-          <Grid.Col span={3}>
-            <Image
-              src={item?.poster}
-              mx="auto"
-              className={classes.poster}
-              withPlaceholder
-            ></Image>
-          </Grid.Col>
-        </MediaQuery>
-        <Grid.Col span={8} className={classes.col}>
-          <Stack align="flex-start" spacing="xs" mx={6}>
-            <Group align="flex-start" noWrap className={classes.group}>
+        <Grid.Col span={3} visibleFrom="sm">
+          <Image src={item?.poster} mx="auto" maw="250px"></Image>
+        </Grid.Col>
+        <Grid.Col span={8} maw="100%" style={{ overflow: "hidden" }}>
+          <Stack align="flex-start" gap="xs" mx={6}>
+            <Group align="flex-start" wrap="nowrap" maw="100%">
               <Title my={0}>
-                <Text inherit color="white">
+                <Text inherit c="white">
                   <Box component="span" mr={12}>
                     <FontAwesomeIcon
                       title={item?.monitored ? "monitored" : "unmonitored"}
@@ -176,10 +170,7 @@ const ItemOverview: FunctionComponent<Props> = (props) => {
               </Title>
               <HoverCard position="bottom" withArrow>
                 <HoverCard.Target>
-                  <Text
-                    hidden={item?.alternativeTitles.length === 0}
-                    color="white"
-                  >
+                  <Text hidden={item?.alternativeTitles.length === 0} c="white">
                     <FontAwesomeIcon icon={faClone} />
                   </Text>
                 </HoverCard.Target>
@@ -192,16 +183,16 @@ const ItemOverview: FunctionComponent<Props> = (props) => {
                 </HoverCard.Dropdown>
               </HoverCard>
             </Group>
-            <Group spacing="xs" className={classes.group}>
+            <Group gap="xs" maw="100%">
               {detailBadges}
             </Group>
-            <Group spacing="xs" className={classes.group}>
+            <Group gap="xs" maw="100%">
               {audioBadges}
             </Group>
-            <Group spacing="xs" className={classes.group}>
+            <Group gap="xs" maw="100%">
               {languageBadges}
             </Group>
-            <Text size="sm" color="white">
+            <Text size="sm" c="white">
               {item?.overview}
             </Text>
           </Stack>
@@ -223,8 +214,8 @@ const ItemBadge: FunctionComponent<ItemBadgeProps> = ({
 }) => (
   <Badge
     leftSection={<FontAwesomeIcon icon={icon}></FontAwesomeIcon>}
+    variant="light"
     radius="sm"
-    color="dark"
     size="sm"
     style={{ textTransform: "none" }}
     aria-label={title}

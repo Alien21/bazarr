@@ -20,6 +20,7 @@ On your projects root folder now you can start as::
     DJANGO_ALLOWED_HOSTS='["localhost"]' \
     python manage.py runserver
 """
+
 from __future__ import annotations
 
 import inspect
@@ -27,6 +28,7 @@ import os
 import sys
 
 import dynaconf
+from dynaconf.hooking import HookableSettings
 
 try:  # pragma: no cover
     from django import conf
@@ -73,6 +75,7 @@ def load(django_settings_module_name=None, **kwargs):  # pragma: no cover
     options.setdefault(
         "default_settings_paths", dynaconf.DEFAULT_SETTINGS_FILES
     )
+    options.setdefault("_wrapper_class", HookableSettings)
 
     class UserSettingsHolder(dynaconf.LazySettings):
         _django_override = True
@@ -112,7 +115,6 @@ def load(django_settings_module_name=None, **kwargs):  # pragma: no cover
 
     # 5) Patch django.conf.settings
     class Wrapper:
-
         # lazy_settings = conf.settings.lazy_settings
 
         def __getattribute__(self, name):

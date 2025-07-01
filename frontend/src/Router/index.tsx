@@ -1,11 +1,29 @@
-import App from "@/App";
+import {
+  createContext,
+  FunctionComponent,
+  lazy,
+  useContext,
+  useMemo,
+} from "react";
+import { createBrowserRouter, RouterProvider } from "react-router";
+import {
+  faClock,
+  faCogs,
+  faExclamationTriangle,
+  faFileExcel,
+  faFilm,
+  faLaptop,
+  faPlay,
+} from "@fortawesome/free-solid-svg-icons";
 import { useBadges } from "@/apis/hooks";
 import { useEnabledStatus } from "@/apis/hooks/site";
+import App from "@/App";
 import { Lazy } from "@/components/async";
 import Authentication from "@/pages/Authentication";
 import BlacklistMoviesView from "@/pages/Blacklist/Movies";
 import BlacklistSeriesView from "@/pages/Blacklist/Series";
 import Episodes from "@/pages/Episodes";
+import NotFound from "@/pages/errors/NotFound";
 import MoviesHistoryView from "@/pages/History/Movies";
 import SeriesHistoryView from "@/pages/History/Series";
 import MovieView from "@/pages/Movies";
@@ -16,6 +34,7 @@ import SeriesMassEditor from "@/pages/Series/Editor";
 import SettingsGeneralView from "@/pages/Settings/General";
 import SettingsLanguagesView from "@/pages/Settings/Languages";
 import SettingsNotificationsView from "@/pages/Settings/Notifications";
+import SettingsPlexView from "@/pages/Settings/Plex";
 import SettingsProvidersView from "@/pages/Settings/Providers";
 import SettingsRadarrView from "@/pages/Settings/Radarr";
 import SettingsSchedulerView from "@/pages/Settings/Scheduler";
@@ -30,30 +49,14 @@ import SystemReleasesView from "@/pages/System/Releases";
 import SystemTasksView from "@/pages/System/Tasks";
 import WantedMoviesView from "@/pages/Wanted/Movies";
 import WantedSeriesView from "@/pages/Wanted/Series";
-import NotFound from "@/pages/errors/NotFound";
 import { Environment } from "@/utilities";
-import {
-  faClock,
-  faCogs,
-  faExclamationTriangle,
-  faFileExcel,
-  faFilm,
-  faLaptop,
-  faPlay,
-} from "@fortawesome/free-solid-svg-icons";
-import {
-  FunctionComponent,
-  createContext,
-  lazy,
-  useContext,
-  useMemo,
-} from "react";
-import { RouterProvider, createBrowserRouter } from "react-router-dom";
 import Redirector from "./Redirector";
 import { RouterNames } from "./RouterNames";
 import { CustomRouteObject } from "./type";
 
-const HistoryStats = lazy(() => import("@/pages/History/Statistics"));
+const HistoryStats = lazy(
+  () => import("@/pages/History/Statistics/HistoryStats"),
+);
 const SystemStatusView = lazy(() => import("@/pages/System/Status"));
 
 function useRoutes(): CustomRouteObject[] {
@@ -221,6 +224,11 @@ function useRoutes(): CustomRouteObject[] {
                 element: <SettingsRadarrView></SettingsRadarrView>,
               },
               {
+                path: "plex",
+                name: "Plex",
+                element: <SettingsPlexView></SettingsPlexView>,
+              },
+              {
                 path: "notifications",
                 name: "Notifications",
                 element: (
@@ -268,6 +276,7 @@ function useRoutes(): CustomRouteObject[] {
               {
                 path: "status",
                 name: "Status",
+                badge: data?.status,
                 element: (
                   <Lazy>
                     <SystemStatusView></SystemStatusView>
@@ -307,9 +316,10 @@ function useRoutes(): CustomRouteObject[] {
       data?.sonarr_signalr,
       data?.radarr_signalr,
       data?.announcements,
+      data?.status,
       radarr,
       sonarr,
-    ]
+    ],
   );
 }
 
@@ -320,8 +330,11 @@ export const Router: FunctionComponent = () => {
 
   // TODO: Move this outside the function component scope
   const router = useMemo(
-    () => createBrowserRouter(routes, { basename: Environment.baseUrl }),
-    [routes]
+    () =>
+      createBrowserRouter(routes, {
+        basename: Environment.baseUrl,
+      }),
+    [routes],
   );
 
   return (

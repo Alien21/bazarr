@@ -6,6 +6,7 @@ from flask_restx import Resource, Namespace, reqparse, fields, marshal
 from functools import reduce
 
 from app.database import get_exclusion_clause, TableEpisodes, TableShows, database, select, update, func
+from sonarr.sync.series import update_one_series
 from subtitles.indexer.series import list_missing_subtitles, series_scan_subtitles
 from subtitles.mass_download import series_download_subtitles
 from subtitles.wanted import wanted_search_missing_subtitles_series
@@ -34,9 +35,11 @@ class Series(Resource):
         'alternativeTitles': fields.List(fields.String),
         'audio_language': fields.Nested(get_audio_language_model),
         'episodeFileCount': fields.Integer(default=0),
+        'ended': fields.Boolean(),
         'episodeMissingCount': fields.Integer(default=0),
         'fanart': fields.String(),
         'imdbId': fields.String(),
+        'lastAired': fields.String(),
         'monitored': fields.Boolean(),
         'overview': fields.String(),
         'path': fields.String(),
@@ -73,7 +76,8 @@ class Series(Resource):
             .group_by(TableShows.sonarrSeriesId)\
             .subquery()
 
-        episodes_missing_conditions = [(TableEpisodes.missing_subtitles != '[]')]
+        episodes_missing_conditions = [(TableEpisodes.missing_subtitles.is_not(None)),
+                                       (TableEpisodes.missing_subtitles != '[]')]
         episodes_missing_conditions += get_exclusion_clause('series')
 
         episodeMissingCount = select(TableShows.sonarrSeriesId,
@@ -99,6 +103,8 @@ class Series(Resource):
                       TableShows.tags,
                       TableShows.title,
                       TableShows.year,
+                      TableShows.ended,
+                      TableShows.lastAired,
                       episodeFileCount.c.episodeFileCount,
                       episodeMissingCount.c.episodeMissingCount) \
             .select_from(TableShows) \
@@ -127,6 +133,8 @@ class Series(Resource):
             'tags': x.tags,
             'title': x.title,
             'year': x.year,
+            'ended': x.ended,
+            'lastAired': x.lastAired,
             'episodeFileCount': x.episodeFileCount,
             'episodeMissingCount': x.episodeMissingCount,
         }) for x in database.execute(stmt).all()]
@@ -191,7 +199,7 @@ class Series(Resource):
     patch_request_parser = reqparse.RequestParser()
     patch_request_parser.add_argument('seriesid', type=int, required=False, help='Sonarr series ID')
     patch_request_parser.add_argument('action', type=str, required=False, help='Action to perform from ["scan-disk", '
-                                                                               '"search-missing", "search-wanted"]')
+                                                                               '"search-missing", "search-wanted", "sync"]')
 
     @authenticate
     @api_ns_series.doc(parser=patch_request_parser)
@@ -216,6 +224,9 @@ class Series(Resource):
                 return '', 204
         elif action == "search-wanted":
             wanted_search_missing_subtitles_series()
+            return '', 204
+        elif action == "sync":
+            update_one_series(seriesid, 'updated')
             return '', 204
 
         return 'Unknown action', 400

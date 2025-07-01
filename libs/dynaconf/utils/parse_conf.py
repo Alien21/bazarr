@@ -32,6 +32,10 @@ KV_PATTERN = re.compile(r"([a-zA-Z0-9 ]*=[a-zA-Z0-9\- :]*)")
 """matches `a=b, c=d, e=f` used on `VALUE='@merge foo=bar'` variables."""
 
 
+class DynaconfFormatError(Exception):
+    """Error to raise when formatting a lazy variable fails"""
+
+
 class DynaconfParseError(Exception):
     """Error to raise when parsing @casts"""
 
@@ -143,7 +147,14 @@ class BaseFormatter:
         self.token = token
 
     def __call__(self, value, **context):
-        return self.function(value, **context)
+        try:
+            return self.function(value, **context)
+        except (KeyError, AttributeError) as exc:
+            # A template like `{this.KEY}` failed with AttributeError
+            # Or KeyError in the case of `{env[KEY]}`
+            raise DynaconfFormatError(
+                f"Dynaconf can't interpolate variable because {exc}"
+            ) from exc
 
     def __str__(self):
         return str(self.token)
@@ -157,11 +168,46 @@ def _jinja_formatter(value, **context):
     return jinja_env.from_string(value).render(**context)
 
 
+def _get_formatter(value, **context):
+    """
+    Invokes settings.get from the annotation in value.
+
+    value can be one of the following:
+
+    @get KEY
+    @get KEY @int
+    @get KEY default_value
+    @get KEY @int default_value
+
+    @marker KEY_TO_LOOKUP @OPTIONAL_CAST OPTIONAL_DEFAULT_VALUE
+
+    key group will match the key
+    cast group will match anything provided after @
+    the default group will match anything between single or double quotes
+    """
+    pattern = re.compile(
+        r"(?P<key>\w+(?:\.\w+)?)\s*"
+        r"(?:(?P<cast>@\w+)\s*)?"
+        r'(?P<quote>["\']?)'
+        r'\s*(?P<default>[^"\']*)\s*(?P=quote)?'
+    )
+    if match := pattern.match(value.strip()):
+        data = match.groupdict()
+        return context["this"].get(
+            key=data["key"],
+            default=data["default"],
+            cast=data["cast"],
+        )
+    else:
+        raise DynaconfFormatError(f"Error parsing {value} malformed syntax.")
+
+
 class Formatters:
     """Dynaconf builtin formatters"""
 
     python_formatter = BaseFormatter(str.format, "format")
     jinja_formatter = BaseFormatter(_jinja_formatter, "jinja")
+    get_formatter = BaseFormatter(_get_formatter, "get")
 
 
 class Lazy:
@@ -257,6 +303,7 @@ converters = {
     "@merge_unique": lambda value, box_settings: Merge(
         value, box_settings, unique=True
     ),
+    "@get": lambda value: Lazy(value, formatter=Formatters.get_formatter),
     # Special markers to be used as placeholders e.g: in prefilled forms
     # will always return None when evaluated
     "@note": lambda value: None,
@@ -267,13 +314,34 @@ converters = {
 }
 
 
-def get_converter(converter_key, value, box_settings):
+def apply_converter(converter_key, value, box_settings):
+    """
+    Get converter and apply it to @value.
+
+    Lazy converters will return Lazy objects for later evaluation.
+    """
     converter = converters[converter_key]
     try:
         converted_value = converter(value, box_settings=box_settings)
     except TypeError:
         converted_value = converter(value)
     return converted_value
+
+
+def add_converter(converter_key, func):
+    """Adds a new converter to the converters dict"""
+    if not converter_key.startswith("@"):
+        converter_key = f"@{converter_key}"
+
+    converters[converter_key] = wraps(func)(
+        lambda value: value.set_casting(func)
+        if isinstance(value, Lazy)
+        else Lazy(
+            value,
+            casting=func,
+            formatter=BaseFormatter(lambda x, **_: x, converter_key),
+        )
+    )
 
 
 def parse_with_toml(data):
@@ -340,7 +408,7 @@ def _parse_conf_data(data, tomlfy=False, box_settings=None):
 
         # Parse the converters iteratively
         for converter_key in converter_key_list[::-1]:
-            value = get_converter(converter_key, value, box_settings)
+            value = apply_converter(converter_key, value, box_settings)
     else:
         value = parse_with_toml(data) if tomlfy else data
 
@@ -351,6 +419,11 @@ def _parse_conf_data(data, tomlfy=False, box_settings=None):
 
 
 def parse_conf_data(data, tomlfy=False, box_settings=None):
+    """
+    Apply parsing tokens recursively and return transformed data.
+
+    Strings with lazy parser (e.g, @format) will become Lazy objects.
+    """
 
     # fix for https://github.com/dynaconf/dynaconf/issues/595
     if isnamedtupleinstance(data):
@@ -366,14 +439,23 @@ def parse_conf_data(data, tomlfy=False, box_settings=None):
             for item in data
         ]
 
-    if isinstance(data, (dict, DynaBox)):
+    if isinstance(data, DynaBox):
         # recursively parse inner dict items
-        _parsed = {}
-        for k, v in data.items():
-            _parsed[k] = parse_conf_data(
+        # It is important to keep the same object id because
+        # of mutability
+        for k, v in data._safe_items():
+            data[k] = parse_conf_data(
                 v, tomlfy=tomlfy, box_settings=box_settings
             )
-        return _parsed
+        return data
+
+    if isinstance(data, dict):
+        # recursively parse inner dict items
+        for k, v in data.items():
+            data[k] = parse_conf_data(
+                v, tomlfy=tomlfy, box_settings=box_settings
+            )
+        return data
 
     # return parsed string value
     return _parse_conf_data(data, tomlfy=tomlfy, box_settings=box_settings)
@@ -398,4 +480,18 @@ def unparse_conf_data(value):
     if value is None:
         return "@none "
 
+    return value
+
+
+def boolean_fix(value: str | None):
+    """Gets a value like `True/False` and turns to `true/false`
+    This function exists because of issue #976
+    Toml parser casts booleans from true/false lower case
+    however envvars are usually exported as True/False capitalized
+    by mistake, this helper fixes it for envvars only.
+
+    Assume envvars are always str.
+    """
+    if value and value.strip() in ("True", "False"):
+        return value.lower()
     return value

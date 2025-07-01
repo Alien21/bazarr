@@ -1,5 +1,5 @@
-import { useLanguageProfiles, useLanguages } from "@/apis/hooks";
 import { useMemo } from "react";
+import { useLanguageProfiles, useLanguages } from "@/apis/hooks";
 
 export function useLanguageProfileBy(id: number | null | undefined) {
   const { data } = useLanguageProfiles();
@@ -39,7 +39,7 @@ export function useProfileItemsToLanguages(profile?: Language.Profile) {
           name,
         };
       }) ?? [],
-    [data, profile?.items]
+    [data, profile?.items],
   );
 }
 
@@ -48,6 +48,10 @@ export function useLanguageFromCode3(code3: string) {
 
   return useMemo(
     () => data?.find((value) => value.code3 === code3),
-    [data, code3]
+    [data, code3],
   );
 }
+
+export const normalizeAudioLanguage = (name: string) => {
+  return name === "Chinese Simplified" ? "Chinese" : name;
+};

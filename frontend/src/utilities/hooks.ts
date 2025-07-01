@@ -1,5 +1,3 @@
-import { SelectorOption, SelectorProps } from "@/components";
-import { SliderProps } from "@mantine/core";
 import {
   Dispatch,
   useCallback,
@@ -8,7 +6,9 @@ import {
   useRef,
   useState,
 } from "react";
-import { useNavigate } from "react-router-dom";
+import { useNavigate } from "react-router";
+import { SliderProps } from "@mantine/core";
+import { SelectorOption, SelectorProps } from "@/components";
 
 export function useGotoHomepage() {
   const navigate = useNavigate();
@@ -18,7 +18,7 @@ export function useGotoHomepage() {
 export function useSelectorOptions<T>(
   options: readonly T[],
   label: (value: T) => string,
-  key?: (value: T) => string
+  key?: (value: T) => string,
 ): Pick<SelectorProps<T>, "options" | "getkey"> {
   const labelRef = useRef(label);
   labelRef.current = label;
@@ -32,7 +32,7 @@ export function useSelectorOptions<T>(
         value,
         label: labelRef.current(value),
       })),
-    [options]
+    [options],
   );
 
   return useMemo(
@@ -40,7 +40,7 @@ export function useSelectorOptions<T>(
       options: wrappedOptions,
       getkey: keyRef.current ?? labelRef.current,
     }),
-    [wrappedOptions]
+    [wrappedOptions],
   );
 }
 
@@ -51,7 +51,7 @@ export function useSliderMarks(values: number[]): SliderProps["marks"] {
         value: value,
         label: value.toString(),
       })),
-    [values]
+    [values],
   );
 }
 
@@ -103,7 +103,7 @@ export function useArrayAction<T>(setData: Dispatch<(prev: T[]) => T[]>) {
       remove,
       update,
     }),
-    [add, mutate, remove, update]
+    [add, mutate, remove, update],
   );
 }
 
@@ -111,7 +111,7 @@ export function useThrottle<F extends GenericFunction>(fn: F, ms: number) {
   const fnRef = useRef(fn);
   fnRef.current = fn;
 
-  const timer = useRef<number>();
+  const timer = useRef<number>(undefined);
 
   return useCallback(
     (...args: Parameters<F>) => {
@@ -121,7 +121,7 @@ export function useThrottle<F extends GenericFunction>(fn: F, ms: number) {
       }
       timer.current = window.setTimeout(() => fnRef.current(...args), ms);
     },
-    [ms]
+    [ms],
   );
 }
 
@@ -153,7 +153,7 @@ export function useOnValueChange<T>(value: T, onChange: (value: T) => void) {
 
 // Mantine's useInterval has some weird issues. This is a workaround.
 export function useInterval(fn: VoidFunction, ms: number) {
-  const timer = useRef<number>();
+  const timer = useRef<number>(undefined);
 
   useEffect(() => {
     timer.current = window.setInterval(fn, ms);

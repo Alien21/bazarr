@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import io
 from pathlib import Path
 
 from dynaconf import default_settings
@@ -14,7 +13,7 @@ except ImportError:  # pragma: no cover
     ConfigObj = None
 
 
-def load(obj, env=None, silent=True, key=None, filename=None):
+def load(obj, env=None, silent=True, key=None, filename=None, validate=False):
     """
     Reads and loads in to "obj" a single key or all keys from source file.
 
@@ -36,6 +35,7 @@ def load(obj, env=None, silent=True, key=None, filename=None):
         extensions=INI_EXTENSIONS,
         file_reader=lambda fileobj: ConfigObj(fileobj).dict(),
         string_reader=lambda strobj: ConfigObj(strobj.split("\n")).dict(),
+        validate=validate,
     )
     loader.load(
         filename=filename,

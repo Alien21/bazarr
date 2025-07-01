@@ -1,13 +1,4 @@
-import { withModal } from "@/modules/modals";
-import { task, TaskGroup } from "@/modules/task";
-import { useTableStyles } from "@/styles";
-import { GetItemId } from "@/utilities";
-import {
-  faCaretDown,
-  faDownload,
-  faInfoCircle,
-} from "@fortawesome/free-solid-svg-icons";
-import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
+import React, { useCallback, useMemo, useState } from "react";
 import {
   Alert,
   Anchor,
@@ -19,21 +10,28 @@ import {
   Stack,
   Text,
 } from "@mantine/core";
+import {
+  faCaretDown,
+  faDownload,
+  faInfoCircle,
+} from "@fortawesome/free-solid-svg-icons";
+import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
+import { UseQueryResult } from "@tanstack/react-query";
+import { ColumnDef } from "@tanstack/react-table";
 import { isString } from "lodash";
-import { useCallback, useMemo, useState } from "react";
-import { UseQueryResult } from "react-query";
-import { Column } from "react-table";
-import { Action, PageTable } from "..";
-import Language from "../bazarr/Language";
-import StateIcon from "../StateIcon";
+import { Action } from "@/components";
+import Language from "@/components/bazarr/Language";
+import StateIcon from "@/components/StateIcon";
+import PageTable from "@/components/tables/PageTable";
+import { withModal } from "@/modules/modals";
+import { task, TaskGroup } from "@/modules/task";
+import { GetItemId } from "@/utilities";
 
 type SupportType = Item.Movie | Item.Episode;
 
 interface Props<T extends SupportType> {
   download: (item: T, result: SearchResultType) => Promise<void>;
-  query: (
-    id?: number
-  ) => UseQueryResult<SearchResultType[] | undefined, unknown>;
+  query: (id?: number) => UseQueryResult<SearchResultType[] | undefined>;
   item: T;
 }
 
@@ -50,26 +48,67 @@ function ManualSearchView<T extends SupportType>(props: Props<T>) {
 
   const search = useCallback(() => {
     setSearchStarted(true);
-    results.refetch();
+
+    void results.refetch();
   }, [results]);
 
-  const columns = useMemo<Column<SearchResultType>[]>(
+  const ReleaseInfoCell = React.memo(
+    ({ releaseInfo }: { releaseInfo: string[] }) => {
+      const [open, setOpen] = useState(false);
+
+      const items = useMemo(
+        () => releaseInfo.slice(1).map((v, idx) => <Text key={idx}>{v}</Text>),
+        [releaseInfo],
+      );
+
+      if (releaseInfo.length === 0) {
+        return <Text c="dimmed">Cannot get release info</Text>;
+      }
+
+      return (
+        <Stack gap={0} onClick={() => setOpen((o) => !o)}>
+          <Text className="table-primary" span>
+            {releaseInfo[0]}
+            {releaseInfo.length > 1 && (
+              <FontAwesomeIcon
+                icon={faCaretDown}
+                rotation={open ? 180 : undefined}
+              ></FontAwesomeIcon>
+            )}
+          </Text>
+          <Collapse in={open}>
+            <>{items}</>
+          </Collapse>
+        </Stack>
+      );
+    },
+  );
+
+  const columns = useMemo<ColumnDef<SearchResultType>[]>(
     () => [
       {
-        Header: "Score",
-        accessor: "score",
-        Cell: ({ value }) => {
-          const { classes } = useTableStyles();
-          return <Text className={classes.noWrap}>{value}%</Text>;
+        header: "Score",
+        accessorKey: "score",
+        cell: ({
+          row: {
+            original: { score },
+          },
+        }) => {
+          return <Text className="table-no-wrap">{score}%</Text>;
         },
       },
       {
-        accessor: "language",
-        Cell: ({ row: { original }, value }) => {
+        header: "Language",
+        accessorKey: "language",
+        cell: ({
+          row: {
+            original: { language, hearing_impaired: hi, forced },
+          },
+        }) => {
           const lang: Language.Info = {
-            code2: value,
-            hi: original.hearing_impaired === "True",
-            forced: original.forced === "True",
+            code2: language,
+            hi: hi === "True",
+            forced: forced === "True",
             name: "",
           };
           return (
@@ -80,16 +119,19 @@ function ManualSearchView<T extends SupportType>(props: Props<T>) {
         },
       },
       {
-        Header: "Provider",
-        accessor: "provider",
-        Cell: (row) => {
-          const { classes } = useTableStyles();
-          const value = row.value;
-          const { url } = row.row.original;
+        header: "Provider",
+        accessorKey: "provider",
+        cell: ({
+          row: {
+            original: { provider, url },
+          },
+        }) => {
+          const value = provider;
+
           if (url) {
             return (
               <Anchor
-                className={classes.noWrap}
+                className="table-no-wrap"
                 href={url}
                 target="_blank"
                 rel="noopener noreferrer"
@@ -103,50 +145,31 @@ function ManualSearchView<T extends SupportType>(props: Props<T>) {
         },
       },
       {
-        Header: "Release",
-        accessor: "release_info",
-        Cell: ({ value }) => {
-          const { classes } = useTableStyles();
-          const [open, setOpen] = useState(false);
-
-          const items = useMemo(
-            () => value.slice(1).map((v, idx) => <Text key={idx}>{v}</Text>),
-            [value]
-          );
-
-          if (value.length === 0) {
-            return <Text color="dimmed">Cannot get release info</Text>;
-          }
-
-          return (
-            <Stack spacing={0} onClick={() => setOpen((o) => !o)}>
-              <Text className={classes.primary}>
-                {value[0]}
-                {value.length > 1 && (
-                  <FontAwesomeIcon
-                    icon={faCaretDown}
-                    rotation={open ? 180 : undefined}
-                  ></FontAwesomeIcon>
-                )}
-              </Text>
-              <Collapse in={open}>
-                <>{items}</>
-              </Collapse>
-            </Stack>
-          );
+        header: "Release",
+        accessorKey: "release_info",
+        cell: ({
+          row: {
+            original: { release_info: releaseInfo },
+          },
+        }) => {
+          return <ReleaseInfoCell releaseInfo={releaseInfo} />;
         },
       },
       {
-        Header: "Upload",
-        accessor: "uploader",
-        Cell: ({ value }) => {
-          const { classes } = useTableStyles();
-          return <Text className={classes.noWrap}>{value ?? "-"}</Text>;
+        header: "Uploader",
+        accessorKey: "uploader",
+        cell: ({
+          row: {
+            original: { uploader },
+          },
+        }) => {
+          return <Text className="table-no-wrap">{uploader ?? "-"}</Text>;
         },
       },
       {
-        accessor: "matches",
-        Cell: (row) => {
+        header: "Match",
+        accessorKey: "matches",
+        cell: (row) => {
           const { matches, dont_matches: dont } = row.row.original;
           return (
             <StateIcon
@@ -158,15 +181,15 @@ function ManualSearchView<T extends SupportType>(props: Props<T>) {
         },
       },
       {
-        accessor: "subtitle",
-        Cell: ({ row }) => {
+        header: "Get",
+        accessorKey: "subtitle",
+        cell: ({ row }) => {
           const result = row.original;
           return (
             <Action
               label="Download"
               icon={faDownload}
-              color="brand"
-              variant="light"
+              c="brand"
               disabled={item === null}
               onClick={() => {
                 if (!item) return;
@@ -176,7 +199,7 @@ function ManualSearchView<T extends SupportType>(props: Props<T>) {
                   TaskGroup.DownloadSubtitle,
                   download,
                   item,
-                  result
+                  result,
                 );
               }}
             ></Action>
@@ -184,7 +207,7 @@ function ManualSearchView<T extends SupportType>(props: Props<T>) {
         },
       },
     ],
-    [download, item]
+    [download, item, ReleaseInfoCell],
   );
 
   const bSceneNameAvailable =
@@ -211,6 +234,7 @@ function ManualSearchView<T extends SupportType>(props: Props<T>) {
       </Alert>
       <Collapse in={haveResult && !results.isFetching}>
         <PageTable
+          autoScroll={false}
           tableStyles={{ emptyText: "No result", placeholder: 10 }}
           columns={columns}
           data={results.data ?? []}
@@ -227,10 +251,10 @@ function ManualSearchView<T extends SupportType>(props: Props<T>) {
 export const MovieSearchModal = withModal<Props<Item.Movie>>(
   ManualSearchView,
   "movie-manual-search",
-  { title: "Search Subtitles", size: "calc(100vw - 4rem)" }
+  { title: "Search Subtitles", size: "calc(100vw - 4rem)" },
 );
 export const EpisodeSearchModal = withModal<Props<Item.Episode>>(
   ManualSearchView,
   "episode-manual-search",
-  { title: "Search Subtitles", size: "calc(100vw - 4rem)" }
+  { title: "Search Subtitles", size: "calc(100vw - 4rem)" },
 );

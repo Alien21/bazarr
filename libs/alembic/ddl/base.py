@@ -1,3 +1,6 @@
+# mypy: allow-untyped-defs, allow-incomplete-defs, allow-untyped-calls
+# mypy: no-warn-return-any, allow-any-generics
+
 from __future__ import annotations
 
 import functools
@@ -37,7 +40,6 @@ _ServerDefault = Union["TextClause", "FetchedValue", "Function[Any]", str]
 
 
 class AlterTable(DDLElement):
-
     """Represent an ALTER TABLE statement.
 
     Only the string name and optional schema name of the table
@@ -150,7 +152,7 @@ class AddColumn(AlterTable):
     def __init__(
         self,
         name: str,
-        column: Column,
+        column: Column[Any],
         schema: Optional[Union[quoted_name, str]] = None,
     ) -> None:
         super().__init__(name, schema=schema)
@@ -159,7 +161,7 @@ class AddColumn(AlterTable):
 
 class DropColumn(AlterTable):
     def __init__(
-        self, name: str, column: Column, schema: Optional[str] = None
+        self, name: str, column: Column[Any], schema: Optional[str] = None
     ) -> None:
         super().__init__(name, schema=schema)
         self.column = column
@@ -235,9 +237,11 @@ def visit_column_default(
     return "%s %s %s" % (
         alter_table(compiler, element.table_name, element.schema),
         alter_column(compiler, element.column_name),
-        "SET DEFAULT %s" % format_server_default(compiler, element.default)
-        if element.default is not None
-        else "DROP DEFAULT",
+        (
+            "SET DEFAULT %s" % format_server_default(compiler, element.default)
+            if element.default is not None
+            else "DROP DEFAULT"
+        ),
     )
 
 
@@ -320,7 +324,7 @@ def alter_column(compiler: DDLCompiler, name: str) -> str:
     return "ALTER COLUMN %s" % format_column_name(compiler, name)
 
 
-def add_column(compiler: DDLCompiler, column: Column, **kw) -> str:
+def add_column(compiler: DDLCompiler, column: Column[Any], **kw) -> str:
     text = "ADD COLUMN %s" % compiler.get_column_specification(column, **kw)
 
     const = " ".join(

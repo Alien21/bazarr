@@ -1,4 +1,32 @@
-import { RouterNames } from "@/Router/RouterNames";
+import {
+  FunctionComponent,
+  useCallback,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
+import { Navigate, useParams } from "react-router";
+import { Container, Group, Stack } from "@mantine/core";
+import { Dropzone } from "@mantine/dropzone";
+import { useDocumentTitle } from "@mantine/hooks";
+import { showNotification } from "@mantine/notifications";
+import {
+  faAdjust,
+  faBriefcase,
+  faCalendar,
+  faCircleChevronDown,
+  faCircleChevronRight,
+  faCloudUploadAlt,
+  faHardDrive,
+  faHdd,
+  faPlay,
+  faSearch,
+  faStop,
+  faSync,
+  faTriangleExclamation,
+  faWrench,
+} from "@fortawesome/free-solid-svg-icons";
+import { Table as TableInstance } from "@tanstack/table-core/build/lib/types";
 import {
   useEpisodesBySeriesId,
   useIsAnyActionRunning,
@@ -12,24 +40,10 @@ import { ItemEditModal } from "@/components/forms/ItemEditForm";
 import { SeriesUploadModal } from "@/components/forms/SeriesUploadForm";
 import { SubtitleToolsModal } from "@/components/modals";
 import { useModals } from "@/modules/modals";
-import { TaskGroup, notification, task } from "@/modules/task";
+import { notification, task, TaskGroup } from "@/modules/task";
 import ItemOverview from "@/pages/views/ItemOverview";
+import { RouterNames } from "@/Router/RouterNames";
 import { useLanguageProfileBy } from "@/utilities/languages";
-import {
-  faAdjust,
-  faBriefcase,
-  faCloudUploadAlt,
-  faHdd,
-  faSearch,
-  faSync,
-  faWrench,
-} from "@fortawesome/free-solid-svg-icons";
-import { Container, Group, Stack } from "@mantine/core";
-import { Dropzone } from "@mantine/dropzone";
-import { useDocumentTitle } from "@mantine/hooks";
-import { showNotification } from "@mantine/notifications";
-import { FunctionComponent, useCallback, useMemo, useRef } from "react";
-import { Navigate, useParams } from "react-router-dom";
 import Table from "./table";
 
 const SeriesEpisodesView: FunctionComponent = () => {
@@ -54,11 +68,23 @@ const SeriesEpisodesView: FunctionComponent = () => {
         text: `${series?.episodeFileCount} files`,
       },
       {
+        icon: faTriangleExclamation,
+        text: `${series?.episodeMissingCount} missing subtitles`,
+      },
+      {
+        icon: series?.ended ? faStop : faPlay,
+        text: series?.ended ? "Ended" : "Continuing",
+      },
+      {
+        icon: faCalendar,
+        text: `Last ${series?.ended ? "aired on" : "known airdate"}: ${series?.lastAired}`,
+      },
+      {
         icon: faAdjust,
         text: series?.seriesType ?? "",
       },
     ],
-    [series]
+    [series],
   );
 
   const modals = useModals();
@@ -78,15 +104,21 @@ const SeriesEpisodesView: FunctionComponent = () => {
         showNotification(
           notification.warn(
             "Cannot Upload Files",
-            "series or language profile is not ready"
-          )
+            "series or language profile is not ready",
+          ),
         );
       }
     },
-    [modals, profile, series]
+    [modals, profile, series],
   );
 
   useDocumentTitle(`${series?.title ?? "Unknown Series"} - Bazarr (Series)`);
+
+  const tableRef = useRef<TableInstance<Item.Episode> | null>(null);
+
+  const [isAllRowExpanded, setIsAllRowExpanded] = useState(
+    tableRef?.current?.getIsAllRowsExpanded(),
+  );
 
   const openDropzone = useRef<VoidFunction>(null);
 
@@ -105,9 +137,23 @@ const SeriesEpisodesView: FunctionComponent = () => {
           <DropContent></DropContent>
         </Dropzone.FullScreen>
         <Toolbox>
-          <Group spacing="xs">
+          <Group gap="xs">
             <Toolbox.Button
               icon={faSync}
+              disabled={!available || hasTask}
+              onClick={() => {
+                if (series) {
+                  task.create(series.title, TaskGroup.Sync, action, {
+                    action: "sync",
+                    seriesid: id,
+                  });
+                }
+              }}
+            >
+              Sync
+            </Toolbox.Button>
+            <Toolbox.Button
+              icon={faHardDrive}
               disabled={!available || hasTask}
               onClick={() => {
                 if (series) {
@@ -136,11 +182,12 @@ const SeriesEpisodesView: FunctionComponent = () => {
                 series.profileId === null ||
                 !available
               }
+              loading={hasTask}
             >
               Search
             </Toolbox.Button>
           </Group>
-          <Group spacing="xs">
+          <Group gap="xs">
             <Toolbox.Button
               disabled={
                 series === undefined ||
@@ -164,7 +211,8 @@ const SeriesEpisodesView: FunctionComponent = () => {
                 series === undefined ||
                 series.episodeFileCount === 0 ||
                 series.profileId === null ||
-                !available
+                !available ||
+                hasTask
               }
               icon={faCloudUploadAlt}
               onClick={() => openDropzone.current?.()}
@@ -182,12 +230,22 @@ const SeriesEpisodesView: FunctionComponent = () => {
                       item: series,
                       mutation,
                     },
-                    { title: series.title }
+                    { title: series.title },
                   );
                 }
               }}
             >
               Edit Series
+            </Toolbox.Button>
+            <Toolbox.Button
+              icon={
+                isAllRowExpanded ? faCircleChevronRight : faCircleChevronDown
+              }
+              onClick={() => {
+                tableRef.current?.toggleAllRowsExpanded();
+              }}
+            >
+              {isAllRowExpanded ? "Collapse All" : "Expand All"}
             </Toolbox.Button>
           </Group>
         </Toolbox>
@@ -195,9 +253,11 @@ const SeriesEpisodesView: FunctionComponent = () => {
           <ItemOverview item={series ?? null} details={details}></ItemOverview>
           <QueryOverlay result={episodesQuery}>
             <Table
+              ref={tableRef}
               episodes={episodes ?? null}
               profile={profile}
               disabled={hasTask || !series || series.profileId === null}
+              onAllRowsExpandedChanged={setIsAllRowExpanded}
             ></Table>
           </QueryOverlay>
         </Stack>

@@ -3,12 +3,14 @@
 
 import logging
 import gc
+import os
 
 from app.config import settings
+from app.event_handler import show_progress, hide_progress
 from subtitles.tools.subsyncer import SubSyncer
 
 
-def sync_subtitles(video_path, srt_path, srt_lang, forced, percent_score, sonarr_series_id=None,
+def sync_subtitles(video_path, srt_path, srt_lang, forced, hi, percent_score, sonarr_series_id=None,
                    sonarr_episode_id=None, radarr_id=None):
     if forced:
         logging.debug('BAZARR cannot sync forced subtitles. Skipping sync routine.')
@@ -26,8 +28,36 @@ def sync_subtitles(video_path, srt_path, srt_lang, forced, percent_score, sonarr
 
         if not use_subsync_threshold or (use_subsync_threshold and percent_score < float(subsync_threshold)):
             subsync = SubSyncer()
-            subsync.sync(video_path=video_path, srt_path=srt_path, srt_lang=srt_lang,
-                         sonarr_series_id=sonarr_series_id, sonarr_episode_id=sonarr_episode_id, radarr_id=radarr_id)
+            sync_kwargs = {
+                'video_path': video_path,
+                'srt_path': srt_path,
+                'srt_lang': srt_lang,
+                'forced': forced,
+                'hi': hi,
+                'max_offset_seconds': str(settings.subsync.max_offset_seconds),
+                'no_fix_framerate': settings.subsync.no_fix_framerate,
+                'gss': settings.subsync.gss,
+                'reference': None,  # means choose automatically within video file
+                'sonarr_series_id': sonarr_series_id,
+                'sonarr_episode_id': sonarr_episode_id,
+                'radarr_id': radarr_id,
+            }
+            subtitles_filename = os.path.basename(srt_path)
+            show_progress(id=f'subsync_{subtitles_filename}',
+                          header='Syncing Subtitle',
+                          name=srt_path,
+                          value=0,
+                          count=1)
+            try:
+                subsync.sync(**sync_kwargs)
+            except Exception:
+                hide_progress(id=f'subsync_{subtitles_filename}')
+            else:
+                show_progress(id=f'subsync_{subtitles_filename}',
+                              header='Syncing Subtitle',
+                              name=srt_path,
+                              value=1,
+                              count=1)
             del subsync
             gc.collect()
             return True

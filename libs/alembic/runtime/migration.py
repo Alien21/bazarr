@@ -1,3 +1,6 @@
+# mypy: allow-untyped-defs, allow-incomplete-defs, allow-untyped-calls
+# mypy: no-warn-return-any, allow-any-generics
+
 from __future__ import annotations
 
 from contextlib import contextmanager
@@ -5,10 +8,12 @@ from contextlib import nullcontext
 import logging
 import sys
 from typing import Any
+from typing import Callable
 from typing import cast
 from typing import Collection
 from typing import ContextManager
 from typing import Dict
+from typing import Iterable
 from typing import Iterator
 from typing import List
 from typing import Optional
@@ -19,10 +24,6 @@ from typing import Union
 
 from sqlalchemy import Column
 from sqlalchemy import literal_column
-from sqlalchemy import MetaData
-from sqlalchemy import PrimaryKeyConstraint
-from sqlalchemy import String
-from sqlalchemy import Table
 from sqlalchemy.engine import Engine
 from sqlalchemy.engine import url as sqla_url
 from sqlalchemy.engine.strategies import MockEngineStrategy
@@ -31,6 +32,7 @@ from .. import ddl
 from .. import util
 from ..util import sqla_compat
 from ..util.compat import EncodedIO
+from ..util.sqla_compat import _select
 
 if TYPE_CHECKING:
     from sqlalchemy.engine import Dialect
@@ -38,7 +40,7 @@ if TYPE_CHECKING:
     from sqlalchemy.engine.base import Connection
     from sqlalchemy.engine.base import Transaction
     from sqlalchemy.engine.mock import MockConnection
-    from sqlalchemy.sql.elements import ClauseElement
+    from sqlalchemy.sql import Executable
 
     from .environment import EnvironmentContext
     from ..config import Config
@@ -74,14 +76,13 @@ class _ProxyTransaction:
     def __enter__(self) -> _ProxyTransaction:
         return self
 
-    def __exit__(self, type_: None, value: None, traceback: None) -> None:
+    def __exit__(self, type_: Any, value: Any, traceback: Any) -> None:
         if self._proxied_transaction is not None:
             self._proxied_transaction.__exit__(type_, value, traceback)
             self.migration_context._transaction = None
 
 
 class MigrationContext:
-
     """Represent the database state made available to a migration
     script.
 
@@ -97,6 +98,7 @@ class MigrationContext:
 
         # from within env.py script
         from alembic import context
+
         migration_context = context.get_context()
 
     For usage outside of an ``env.py`` script, such as for
@@ -122,6 +124,7 @@ class MigrationContext:
 
         # in any application, outside of the normal Alembic environment
         from alembic.operations import Operations
+
         op = Operations(context)
         op.alter_column("mytable", "somecolumn", nullable=True)
 
@@ -158,7 +161,9 @@ class MigrationContext:
                 sqla_compat._get_connection_in_transaction(connection)
             )
 
-        self._migrations_fn = opts.get("fn")
+        self._migrations_fn: Optional[
+            Callable[..., Iterable[RevisionStep]]
+        ] = opts.get("fn")
         self.as_sql = as_sql
 
         self.purge = opts.get("purge", False)
@@ -172,7 +177,7 @@ class MigrationContext:
         else:
             self.output_buffer = opts.get("output_buffer", sys.stdout)
 
-        self._user_compare_type = opts.get("compare_type", False)
+        self._user_compare_type = opts.get("compare_type", True)
         self._user_compare_server_default = opts.get(
             "compare_server_default", False
         )
@@ -182,18 +187,6 @@ class MigrationContext:
         self.version_table_schema = version_table_schema = opts.get(
             "version_table_schema", None
         )
-        self._version = Table(
-            version_table,
-            MetaData(),
-            Column("version_num", String(32), nullable=False),
-            schema=version_table_schema,
-        )
-        if opts.get("version_table_pk", True):
-            self._version.append_constraint(
-                PrimaryKeyConstraint(
-                    "version_num", name="%s_pkc" % version_table
-                )
-            )
 
         self._start_from_rev: Optional[str] = opts.get("starting_rev")
         self.impl = ddl.DefaultImpl.get_by_dialect(dialect)(
@@ -204,14 +197,23 @@ class MigrationContext:
             self.output_buffer,
             opts,
         )
+
+        self._version = self.impl.version_table_impl(
+            version_table=version_table,
+            version_table_schema=version_table_schema,
+            version_table_pk=opts.get("version_table_pk", True),
+        )
+
         log.info("Context impl %s.", self.impl.__class__.__name__)
         if self.as_sql:
             log.info("Generating static SQL")
         log.info(
             "Will assume %s DDL.",
-            "transactional"
-            if self.impl.transactional_ddl
-            else "non-transactional",
+            (
+                "transactional"
+                if self.impl.transactional_ddl
+                else "non-transactional"
+            ),
         )
 
     @classmethod
@@ -314,8 +316,6 @@ class MigrationContext:
             migrations whether or not one of them has an autocommit block.
 
 
-        .. versionadded:: 1.2.0
-
         """
         _in_connection_transaction = self._in_connection_transaction()
 
@@ -338,9 +338,9 @@ class MigrationContext:
             # except that it will not know it's in "autocommit" and will
             # emit deprecation warnings when an autocommit action takes
             # place.
-            self.connection = (
-                self.impl.connection
-            ) = base_connection.execution_options(isolation_level="AUTOCOMMIT")
+            self.connection = self.impl.connection = (
+                base_connection.execution_options(isolation_level="AUTOCOMMIT")
+            )
 
             # sqlalchemy future mode will "autobegin" in any case, so take
             # control of that "transaction" here
@@ -516,9 +516,8 @@ class MigrationContext:
             if start_from_rev == "base":
                 start_from_rev = None
             elif start_from_rev is not None and self.script:
-
                 start_from_rev = [
-                    cast("Script", self.script.get_revision(sfr)).revision
+                    self.script.get_revision(sfr).revision
                     for sfr in util.to_list(start_from_rev)
                     if sfr not in (None, "base")
                 ]
@@ -533,7 +532,10 @@ class MigrationContext:
                 return ()
         assert self.connection is not None
         return tuple(
-            row[0] for row in self.connection.execute(self._version.select())
+            row[0]
+            for row in self.connection.execute(
+                _select(self._version.c.version_num)
+            )
         )
 
     def _ensure_version_table(self, purge: bool = False) -> None:
@@ -608,7 +610,6 @@ class MigrationContext:
         assert self._migrations_fn is not None
         for step in self._migrations_fn(heads, self):
             with self.begin_transaction(_per_migration=True):
-
                 if self.as_sql and not head_maintainer.heads:
                     # for offline mode, include a CREATE TABLE from
                     # the base
@@ -649,8 +650,8 @@ class MigrationContext:
 
     def execute(
         self,
-        sql: Union[ClauseElement, str],
-        execution_options: Optional[dict] = None,
+        sql: Union[Executable, str],
+        execution_options: Optional[Dict[str, Any]] = None,
     ) -> None:
         """Execute a SQL construct or string statement.
 
@@ -677,7 +678,7 @@ class MigrationContext:
         In online mode, this is an instance of
         :class:`sqlalchemy.engine.Connection`, and is suitable
         for ad-hoc execution of any kind of usage described
-        in :ref:`sqlexpression_toplevel` as well as
+        in SQLAlchemy Core documentation as well as
         for usage with the :meth:`sqlalchemy.schema.Table.create`
         and :meth:`sqlalchemy.schema.MetaData.create_all` methods
         of :class:`~sqlalchemy.schema.Table`,
@@ -702,7 +703,7 @@ class MigrationContext:
             return None
 
     def _compare_type(
-        self, inspector_column: Column, metadata_column: Column
+        self, inspector_column: Column[Any], metadata_column: Column
     ) -> bool:
         if self._user_compare_type is False:
             return False
@@ -722,12 +723,11 @@ class MigrationContext:
 
     def _compare_server_default(
         self,
-        inspector_column: Column,
-        metadata_column: Column,
+        inspector_column: Column[Any],
+        metadata_column: Column[Any],
         rendered_metadata_default: Optional[str],
         rendered_column_default: Optional[str],
     ) -> bool:
-
         if self._user_compare_server_default is False:
             return False
 
@@ -994,11 +994,15 @@ class MigrationInfo:
 
 
 class MigrationStep:
-
     from_revisions_no_deps: Tuple[str, ...]
     to_revisions_no_deps: Tuple[str, ...]
     is_upgrade: bool
     migration_fn: Any
+
+    if TYPE_CHECKING:
+
+        @property
+        def doc(self) -> Optional[str]: ...
 
     @property
     def name(self) -> str:
@@ -1048,13 +1052,9 @@ class RevisionStep(MigrationStep):
         self.revision = revision
         self.is_upgrade = is_upgrade
         if is_upgrade:
-            self.migration_fn = (
-                revision.module.upgrade  # type:ignore[attr-defined]
-            )
+            self.migration_fn = revision.module.upgrade
         else:
-            self.migration_fn = (
-                revision.module.downgrade  # type:ignore[attr-defined]
-            )
+            self.migration_fn = revision.module.downgrade
 
     def __repr__(self):
         return "RevisionStep(%r, is_upgrade=%r)" % (
@@ -1070,7 +1070,7 @@ class RevisionStep(MigrationStep):
         )
 
     @property
-    def doc(self) -> str:
+    def doc(self) -> Optional[str]:
         return self.revision.doc
 
     @property
@@ -1157,7 +1157,7 @@ class RevisionStep(MigrationStep):
             self.to_revisions[0],
         )
 
-    def _unmerge_to_revisions(self, heads: Collection[str]) -> Tuple[str, ...]:
+    def _unmerge_to_revisions(self, heads: Set[str]) -> Tuple[str, ...]:
         other_heads = set(heads).difference([self.revision.revision])
         if other_heads:
             ancestors = {
@@ -1168,10 +1168,21 @@ class RevisionStep(MigrationStep):
             }
             return tuple(set(self.to_revisions).difference(ancestors))
         else:
-            return self.to_revisions
+            # for each revision we plan to return, compute its ancestors
+            # (excluding self), and remove those from the final output since
+            # they are already accounted for.
+            ancestors = {
+                r.revision
+                for to_revision in self.to_revisions
+                for r in self.revision_map._get_ancestor_nodes(
+                    self.revision_map.get_revisions(to_revision), check=False
+                )
+                if r.revision != to_revision
+            }
+            return tuple(set(self.to_revisions).difference(ancestors))
 
     def unmerge_branch_idents(
-        self, heads: Collection[str]
+        self, heads: Set[str]
     ) -> Tuple[str, str, Tuple[str, ...]]:
         to_revisions = self._unmerge_to_revisions(heads)
 
@@ -1275,7 +1286,7 @@ class StampStep(MigrationStep):
         self.migration_fn = self.stamp_revision
         self.revision_map = revision_map
 
-    doc: None = None
+    doc: Optional[str] = None
 
     def stamp_revision(self, **kw: Any) -> None:
         return None
@@ -1283,7 +1294,7 @@ class StampStep(MigrationStep):
     def __eq__(self, other):
         return (
             isinstance(other, StampStep)
-            and other.from_revisions == self.revisions
+            and other.from_revisions == self.from_revisions
             and other.to_revisions == self.to_revisions
             and other.branch_move == self.branch_move
             and self.is_upgrade == other.is_upgrade

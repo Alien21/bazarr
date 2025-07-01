@@ -1,11 +1,11 @@
+import { FunctionComponent, useMemo } from "react";
+import { Button, Divider, Group, LoadingOverlay, Stack } from "@mantine/core";
+import { useForm } from "@mantine/form";
+import { UseMutationResult } from "@tanstack/react-query";
 import { useLanguageProfiles } from "@/apis/hooks";
 import { MultiSelector, Selector } from "@/components/inputs";
 import { useModals, withModal } from "@/modules/modals";
 import { GetItemId, useSelectorOptions } from "@/utilities";
-import { Button, Divider, Group, LoadingOverlay, Stack } from "@mantine/core";
-import { useForm } from "@mantine/form";
-import { FunctionComponent, useMemo } from "react";
-import { UseMutationResult } from "react-query";
 
 interface Props {
   mutation: UseMutationResult<void, unknown, FormType.ModifyItem, unknown>;
@@ -21,18 +21,18 @@ const ItemEditForm: FunctionComponent<Props> = ({
   onCancel,
 }) => {
   const { data, isFetching } = useLanguageProfiles();
-  const { isLoading, mutate } = mutation;
+  const { isPending, mutate } = mutation;
   const modals = useModals();
 
   const profileOptions = useSelectorOptions(
     data ?? [],
     (v) => v.name ?? "Unknown",
-    (v) => v.profileId.toString() ?? "-1"
+    (v) => v.profileId.toString() ?? "-1",
   );
 
   const profile = useMemo(
     () => data?.find((v) => v.profileId === item?.profileId) ?? null,
-    [data, item?.profileId]
+    [data, item?.profileId],
   );
 
   const form = useForm({
@@ -44,10 +44,10 @@ const ItemEditForm: FunctionComponent<Props> = ({
   const options = useSelectorOptions(
     item?.audio_language ?? [],
     (v) => v.name,
-    (v) => v.code2
+    (v) => v.code2,
   );
 
-  const isOverlayVisible = isLoading || isFetching || item === null;
+  const isOverlayVisible = isPending || isFetching || item === null;
 
   return (
     <form
@@ -77,10 +77,10 @@ const ItemEditForm: FunctionComponent<Props> = ({
           {...profileOptions}
           {...form.getInputProps("profile")}
           clearable
-          label="Languages Profiles"
+          label="Languages Profile"
         ></Selector>
         <Divider></Divider>
-        <Group position="right">
+        <Group justify="right">
           <Button
             disabled={isOverlayVisible}
             onClick={() => {

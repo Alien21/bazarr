@@ -1,5 +1,6 @@
 import { SelectorOption } from "@/components";
-import { ReactText } from "react";
+
+type Text = string | number;
 
 type Input<T, N> = {
   type: N;
@@ -8,14 +9,18 @@ type Input<T, N> = {
   name?: string;
   description?: string;
   options?: SelectorOption<string>[];
+  validation?: {
+    rule: (value: string) => string | null;
+  };
 };
 
 type AvailableInput =
-  | Input<ReactText, "text">
+  | Input<Text, "text">
   | Input<string, "password">
   | Input<boolean, "switch">
   | Input<string, "select">
-  | Input<ReactText[], "chips">;
+  | Input<string, "testbutton">
+  | Input<Text[], "chips">;
 
 export interface ProviderInfo {
   key: string;
@@ -64,9 +69,47 @@ export const ProviderList: Readonly<ProviderInfo[]> = [
     ],
   },
   {
+    key: "animekalesi",
+    name: "AnimeKalesi",
+    description: "Turkish Anime Series Subtitles Provider",
+  },
+  {
+    key: "animetosho",
+    name: "Anime Tosho",
+    description:
+      "Anime Tosho is a free, completely automated service which mirrors most torrents posted on TokyoTosho's anime category, Nyaa.si's English translated anime category and AniDex's anime category.",
+    inputs: [
+      {
+        type: "text",
+        key: "search_threshold",
+        defaultValue: 6,
+        name: "Search Threshold. Increase if you often cannot find subtitles for your Anime. Note that increasing the value will decrease the performance of the search for each Episode.",
+      },
+    ],
+    message: "Requires AniDB Integration.",
+  },
+  {
     key: "argenteam_dump",
     name: "Argenteam Dump",
     description: "Subtitles dump of the now extinct Argenteam",
+  },
+  {
+    key: "avistaz",
+    name: "AvistaZ",
+    description:
+      "avistaz.to - AvistaZ is an Asian torrent tracker for HD movies, TV shows and music",
+    inputs: [
+      {
+        type: "text",
+        key: "cookies",
+        name: "Cookies, e.g., PHPSESSID=abc; wikisubtitlesuser=xyz; wikisubtitlespass=efg",
+      },
+      {
+        type: "text",
+        key: "user_agent",
+        name: "User-Agent, e.g., Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:95.0) Gecko/20100101 Firefox/95.0",
+      },
+    ],
   },
   {
     key: "assrt",
@@ -97,9 +140,28 @@ export const ProviderList: Readonly<ProviderInfo[]> = [
       "Provider removed from Bazarr because it was causing too many issues.\nIt will always return no subtitles.",
   },
   {
+    key: "cinemaz",
+    name: "CinemaZ",
+    description:
+      "cinemaz.to - CinemaZ is a private torrent tracker which is dedicated to little-known\nand cult films that you will not find on other popular torrent resources.",
+    inputs: [
+      {
+        type: "text",
+        key: "cookies",
+        name: "Cookies, e.g., PHPSESSID=abc; wikisubtitlesuser=xyz; wikisubtitlespass=efg",
+      },
+      {
+        type: "text",
+        key: "user_agent",
+        name: "User-Agent, e.g., Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:95.0) Gecko/20100101 Firefox/95.0",
+      },
+    ],
+  },
+  {
     key: "embeddedsubtitles",
     name: "Embedded Subtitles",
-    description: "Embedded Subtitles from your Media Files",
+    description:
+      "This provider extracts embedded subtitles from your media files. You must disable 'Treat Embedded Subtitles as Downloaded' in Settings -> Subtitles for this provider to work.",
     inputs: [
       {
         type: "chips",
@@ -120,8 +182,14 @@ export const ProviderList: Readonly<ProviderInfo[]> = [
       },
       {
         type: "switch",
-        key: "unknown_as_english",
-        name: "Use subtitles with unknown info/language as english",
+        key: "unknown_as_fallback",
+        name: "Use subtitles with unknown info/language as fallback language",
+      },
+      {
+        type: "text",
+        key: "fallback_lang",
+        name: "Fallback language",
+        defaultValue: "en",
       },
     ],
     message:
@@ -157,6 +225,35 @@ export const ProviderList: Readonly<ProviderInfo[]> = [
         type: "password",
         key: "passkey",
         name: "Your profile's passkey",
+      },
+    ],
+  },
+  {
+    key: "jimaku",
+    name: "Jimaku.cc",
+    description: "Japanese Subtitles Provider",
+    message:
+      "API key required. Subtitles stem from various sources and might have quality/timing issues.",
+    inputs: [
+      {
+        type: "password",
+        key: "api_key",
+        name: "API key",
+      },
+      {
+        type: "switch",
+        key: "enable_name_search_fallback",
+        name: "Search by name if no AniList ID was determined (Less accurate, required for live action)",
+      },
+      {
+        type: "switch",
+        key: "enable_archives_download",
+        name: "Also consider archives alongside uncompressed subtitles",
+      },
+      {
+        type: "switch",
+        key: "enable_ai_subs",
+        name: "Download AI generated subtitles",
       },
     ],
   },
@@ -218,7 +315,37 @@ export const ProviderList: Readonly<ProviderInfo[]> = [
       { type: "switch", key: "skip_wrong_fps", name: "Skip Wrong FPS" },
     ],
   },
-  { key: "napiprojekt", description: "Polish Subtitles Provider" },
+  {
+    key: "legendasnet",
+    name: "Legendas.net",
+    description: "Brazilian Subtitles Provider",
+    inputs: [
+      {
+        type: "text",
+        key: "username",
+      },
+      {
+        type: "password",
+        key: "password",
+      },
+    ],
+  },
+  {
+    key: "napiprojekt",
+    description: "Polish Subtitles Provider",
+    inputs: [
+      {
+        type: "switch",
+        key: "only_authors",
+        name: "Skip subtitles without authors or possibly AI generated",
+      },
+      {
+        type: "switch",
+        key: "only_real_names",
+        name: "Download subtitles with real name authors only",
+      },
+    ],
+  },
   {
     key: "napisy24",
     description: "Polish Subtitles Provider",
@@ -273,6 +400,12 @@ export const ProviderList: Readonly<ProviderInfo[]> = [
       {
         type: "text",
         key: "username",
+        validation: {
+          rule: (value: string) =>
+            /^.\S+@\S+$/.test(value)
+              ? "Invalid Username. Do not use your e-mail."
+              : null,
+        },
       },
       {
         type: "password",
@@ -314,9 +447,17 @@ export const ProviderList: Readonly<ProviderInfo[]> = [
   },
   { key: "subdivx", description: "LATAM Spanish / Spanish Subtitles Provider" },
   {
+    key: "subdl",
+    inputs: [
+      {
+        type: "text",
+        key: "api_key",
+      },
+    ],
+  },
+  {
     key: "subf2m",
     name: "subf2m.co",
-    description: "Subscene Alternative Provider",
     inputs: [
       {
         type: "switch",
@@ -347,20 +488,6 @@ export const ProviderList: Readonly<ProviderInfo[]> = [
     name: "Subs4Series",
     description:
       "Greek Subtitles Provider.\nRequires anti-captcha provider to solve captchas for each download.",
-  },
-  {
-    key: "subscene",
-    inputs: [
-      {
-        type: "text",
-        key: "username",
-      },
-      {
-        type: "password",
-        key: "password",
-      },
-    ],
-    description: "Broken, may not work for some. Use subf2m instead.",
   },
   { key: "subscenter", description: "Hebrew Subtitles Provider" },
   {
@@ -421,6 +548,30 @@ export const ProviderList: Readonly<ProviderInfo[]> = [
         key: "approved_only",
         name: "Skip unapproved subtitles",
       },
+      {
+        type: "switch",
+        key: "skip_wrong_fps",
+        name: "Skip subtitles with mismatched fps to video's",
+      },
+    ],
+  },
+  {
+    key: "turkcealtyaziorg",
+    name: "Turkcealtyazi.org",
+    description: "Turkish Subtitles Provider",
+    message:
+      "For requests coming from outside of Turkey, cookies and user agent are required. Especially cf_clearance cookie.",
+    inputs: [
+      {
+        type: "text",
+        key: "cookies",
+        name: "Cookies, e.g., PHPSESSID=abc; wikisubtitlesuser=xyz; wikisubtitlespass=efg",
+      },
+      {
+        type: "text",
+        key: "user_agent",
+        name: "User-Agent, e.g., Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:95.0) Gecko/20100101 Firefox/95.0",
+      },
     ],
   },
   {
@@ -460,6 +611,17 @@ export const ProviderList: Readonly<ProviderInfo[]> = [
         name: "Logging level",
         options: logLevelOptions,
       },
+      {
+        type: "switch",
+        key: "pass_video_name",
+        name: "Pass video filename to Whisper (for logging)",
+        defaultValue: false,
+      },
+      {
+        type: "testbutton",
+        key: "whisperai",
+        name: "Test Connection button",
+      },
     ],
   },
   { key: "wizdom", description: "Wizdom.xyz Subtitles Provider" },
@@ -488,5 +650,26 @@ export const ProviderList: Readonly<ProviderInfo[]> = [
     key: "zimuku",
     name: "Zimuku",
     description: "Chinese Subtitles Provider. Anti-captcha required.",
+  },
+];
+
+export const IntegrationList: Readonly<ProviderInfo[]> = [
+  {
+    key: "anidb",
+    name: "AniDB",
+    description:
+      "AniDB is non-profit database of anime information that is freely open to the public.",
+    inputs: [
+      {
+        type: "text",
+        key: "api_client",
+        name: "API Client",
+      },
+      {
+        type: "text",
+        key: "api_client_ver",
+        name: "API Client Version",
+      },
+    ],
   },
 ];

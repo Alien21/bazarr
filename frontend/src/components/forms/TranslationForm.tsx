@@ -1,14 +1,14 @@
+import { FunctionComponent, useMemo } from "react";
+import { Alert, Button, Divider, Stack } from "@mantine/core";
+import { useForm } from "@mantine/form";
+import { isObject } from "lodash";
 import { useSubtitleAction } from "@/apis/hooks";
+import { Selector } from "@/components/inputs";
 import { useModals, withModal } from "@/modules/modals";
 import { task } from "@/modules/task";
 import { useSelectorOptions } from "@/utilities";
 import FormUtils from "@/utilities/form";
 import { useEnabledLanguages } from "@/utilities/languages";
-import { Alert, Button, Divider, Stack } from "@mantine/core";
-import { useForm } from "@mantine/form";
-import { isObject } from "lodash";
-import { FunctionComponent, useMemo } from "react";
-import { Selector } from "../inputs";
 
 const TaskName = "Translating Subtitles";
 
@@ -146,13 +146,13 @@ const TranslationForm: FunctionComponent<Props> = ({
 
   const available = useMemo(
     () => languages.filter((v) => v.code2 in translations),
-    [languages]
+    [languages],
   );
 
   const options = useSelectorOptions(
     available,
     (v) => v.name,
-    (v) => v.code2
+    (v) => v.code2,
   );
 
   return (
@@ -166,7 +166,7 @@ const TranslationForm: FunctionComponent<Props> = ({
                 ...s,
                 language: language.code2,
               },
-            })
+            }),
           );
 
           onSubmit?.();

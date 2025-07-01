@@ -22,10 +22,8 @@ def _get_staging_directory():
 
 
 def staging_env(create=True, template="generic", sourceless=False):
-
     cfg = _testing_config()
     if create:
-
         path = os.path.join(_get_staging_directory(), "scripts")
         assert not os.path.exists(path), (
             "staging directory %s already exists; poor cleanup?" % path
@@ -120,7 +118,7 @@ keys = root,sqlalchemy
 keys = console
 
 [logger_root]
-level = WARN
+level = WARNING
 handlers = console
 qualname =
 
@@ -173,7 +171,7 @@ keys = root
 keys = console
 
 [logger_root]
-level = WARN
+level = WARNING
 handlers = console
 qualname =
 
@@ -218,7 +216,7 @@ keys = root
 keys = console
 
 [logger_root]
-level = WARN
+level = WARNING
 handlers = console
 qualname =
 
@@ -284,7 +282,6 @@ def write_script(
 
 
 def make_sourceless(path, style):
-
     import py_compile
 
     py_compile.compile(path)
@@ -500,7 +497,7 @@ keys = root
 keys = console
 
 [logger_root]
-level = WARN
+level = WARNING
 handlers = console
 qualname =
 

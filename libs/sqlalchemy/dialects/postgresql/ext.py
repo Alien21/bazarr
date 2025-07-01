@@ -1,5 +1,5 @@
-# postgresql/ext.py
-# Copyright (C) 2005-2023 the SQLAlchemy authors and contributors
+# dialects/postgresql/ext.py
+# Copyright (C) 2005-2025 the SQLAlchemy authors and contributors
 # <see AUTHORS file>
 #
 # This module is part of SQLAlchemy and is released under
@@ -35,26 +35,28 @@ class aggregate_order_by(expression.ColumnElement):
     E.g.::
 
         from sqlalchemy.dialects.postgresql import aggregate_order_by
+
         expr = func.array_agg(aggregate_order_by(table.c.a, table.c.b.desc()))
         stmt = select(expr)
 
-    would represent the expression::
+    would represent the expression:
+
+    .. sourcecode:: sql
 
         SELECT array_agg(a ORDER BY b DESC) FROM table;
 
     Similarly::
 
         expr = func.string_agg(
-            table.c.a,
-            aggregate_order_by(literal_column("','"), table.c.a)
+            table.c.a, aggregate_order_by(literal_column("','"), table.c.a)
         )
         stmt = select(expr)
 
-    Would represent::
+    Would represent:
+
+    .. sourcecode:: sql
 
         SELECT string_agg(a, ',' ORDER BY a) FROM table;
-
-    .. versionadded:: 1.1
 
     .. versionchanged:: 1.2.13 - the ORDER BY argument may be multiple terms
 
@@ -133,10 +135,10 @@ class ExcludeConstraint(ColumnCollectionConstraint):
         E.g.::
 
             const = ExcludeConstraint(
-                (Column('period'), '&&'),
-                (Column('group'), '='),
-                where=(Column('group') != 'some group'),
-                ops={'group': 'my_operator_class'}
+                (Column("period"), "&&"),
+                (Column("group"), "="),
+                where=(Column("group") != "some group"),
+                ops={"group": "my_operator_class"},
             )
 
         The constraint is normally embedded into the :class:`_schema.Table`
@@ -144,21 +146,26 @@ class ExcludeConstraint(ColumnCollectionConstraint):
         directly, or added later using :meth:`.append_constraint`::
 
             some_table = Table(
-                'some_table', metadata,
-                Column('id', Integer, primary_key=True),
-                Column('period', TSRANGE()),
-                Column('group', String)
+                "some_table",
+                metadata,
+                Column("id", Integer, primary_key=True),
+                Column("period", TSRANGE()),
+                Column("group", String),
             )
 
             some_table.append_constraint(
                 ExcludeConstraint(
-                    (some_table.c.period, '&&'),
-                    (some_table.c.group, '='),
-                    where=some_table.c.group != 'some group',
-                    name='some_table_excl_const',
-                    ops={'group': 'my_operator_class'}
+                    (some_table.c.period, "&&"),
+                    (some_table.c.group, "="),
+                    where=some_table.c.group != "some group",
+                    name="some_table_excl_const",
+                    ops={"group": "my_operator_class"},
                 )
             )
+
+        The exclude constraint defined in this example requires the
+        ``btree_gist`` extension, that can be created using the
+        command ``CREATE EXTENSION btree_gist;``.
 
         :param \*elements:
 
@@ -288,8 +295,6 @@ def array_agg(*arg, **kw):
     the plain :class:`_types.ARRAY`, unless an explicit ``type_``
     is passed.
 
-    .. versionadded:: 1.1
-
     """
     kw["_default_array_type"] = ARRAY
     return functions.func.array_agg(*arg, **kw)
@@ -301,7 +306,6 @@ class _regconfig_fn(functions.GenericFunction[_T]):
     def __init__(self, *args, **kwargs):
         args = list(args)
         if len(args) > 1:
-
             initial_arg = coercions.expect(
                 roles.ExpressionElementRole,
                 args.pop(0),

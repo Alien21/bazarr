@@ -1,19 +1,21 @@
 import os
 import stat
+import sys
 import typing as t
 from datetime import datetime
 from gettext import gettext as _
 from gettext import ngettext
 
 from ._compat import _get_argv_encoding
-from ._compat import get_filesystem_encoding
 from ._compat import open_stream
 from .exceptions import BadParameter
+from .utils import format_filename
 from .utils import LazyFile
 from .utils import safecall
 
 if t.TYPE_CHECKING:
     import typing_extensions as te
+
     from .core import Context
     from .core import Parameter
     from .shell_completion import CompletionItem
@@ -162,7 +164,7 @@ class CompositeParamType(ParamType):
 
 class FuncParamType(ParamType):
     def __init__(self, func: t.Callable[[t.Any], t.Any]) -> None:
-        self.name = func.__name__
+        self.name: str = func.__name__
         self.func = func
 
     def to_info_dict(self) -> t.Dict[str, t.Any]:
@@ -207,7 +209,7 @@ class StringParamType(ParamType):
             try:
                 value = value.decode(enc)
             except UnicodeError:
-                fs_enc = get_filesystem_encoding()
+                fs_enc = sys.getfilesystemencoding()
                 if fs_enc != enc:
                     try:
                         value = value.decode(fs_enc)
@@ -353,7 +355,11 @@ class DateTime(ParamType):
     name = "datetime"
 
     def __init__(self, formats: t.Optional[t.Sequence[str]] = None):
-        self.formats = formats or ["%Y-%m-%d", "%Y-%m-%dT%H:%M:%S", "%Y-%m-%d %H:%M:%S"]
+        self.formats: t.Sequence[str] = formats or [
+            "%Y-%m-%d",
+            "%Y-%m-%dT%H:%M:%S",
+            "%Y-%m-%d %H:%M:%S",
+        ]
 
     def to_info_dict(self) -> t.Dict[str, t.Any]:
         info_dict = super().to_info_dict()
@@ -397,7 +403,7 @@ class DateTime(ParamType):
 
 
 class _NumberParamTypeBase(ParamType):
-    _number_class: t.ClassVar[t.Type]
+    _number_class: t.ClassVar[t.Type[t.Any]]
 
     def convert(
         self, value: t.Any, param: t.Optional["Parameter"], ctx: t.Optional["Context"]
@@ -653,16 +659,19 @@ class File(ParamType):
     will not be held open until first IO. lazy is mainly useful when opening
     for writing to avoid creating the file until it is needed.
 
-    Starting with Click 2.0, files can also be opened atomically in which
-    case all writes go into a separate file in the same folder and upon
-    completion the file will be moved over to the original location.  This
-    is useful if a file regularly read by other users is modified.
+    Files can also be opened atomically in which case all writes go into a
+    separate file in the same folder and upon completion the file will
+    be moved over to the original location.  This is useful if a file
+    regularly read by other users is modified.
 
     See :ref:`file-args` for more information.
+
+    .. versionchanged:: 2.0
+        Added the ``atomic`` parameter.
     """
 
     name = "filename"
-    envvar_list_splitter = os.path.pathsep
+    envvar_list_splitter: t.ClassVar[str] = os.path.pathsep
 
     def __init__(
         self,
@@ -683,36 +692,38 @@ class File(ParamType):
         info_dict.update(mode=self.mode, encoding=self.encoding)
         return info_dict
 
-    def resolve_lazy_flag(self, value: t.Any) -> bool:
+    def resolve_lazy_flag(self, value: "t.Union[str, os.PathLike[str]]") -> bool:
         if self.lazy is not None:
             return self.lazy
-        if value == "-":
+        if os.fspath(value) == "-":
             return False
         elif "w" in self.mode:
             return True
         return False
 
     def convert(
-        self, value: t.Any, param: t.Optional["Parameter"], ctx: t.Optional["Context"]
-    ) -> t.Any:
-        try:
-            if hasattr(value, "read") or hasattr(value, "write"):
-                return value
+        self,
+        value: t.Union[str, "os.PathLike[str]", t.IO[t.Any]],
+        param: t.Optional["Parameter"],
+        ctx: t.Optional["Context"],
+    ) -> t.IO[t.Any]:
+        if _is_file_like(value):
+            return value
 
+        value = t.cast("t.Union[str, os.PathLike[str]]", value)
+
+        try:
             lazy = self.resolve_lazy_flag(value)
 
             if lazy:
-                f: t.IO = t.cast(
-                    t.IO,
-                    LazyFile(
-                        value, self.mode, self.encoding, self.errors, atomic=self.atomic
-                    ),
+                lf = LazyFile(
+                    value, self.mode, self.encoding, self.errors, atomic=self.atomic
                 )
 
                 if ctx is not None:
-                    ctx.call_on_close(f.close_intelligently)  # type: ignore
+                    ctx.call_on_close(lf.close_intelligently)
 
-                return f
+                return t.cast(t.IO[t.Any], lf)
 
             f, should_close = open_stream(
                 value, self.mode, self.encoding, self.errors, atomic=self.atomic
@@ -730,8 +741,8 @@ class File(ParamType):
                     ctx.call_on_close(safecall(f.flush))
 
             return f
-        except OSError as e:  # noqa: B014
-            self.fail(f"'{os.fsdecode(value)}': {e.strerror}", param, ctx)
+        except OSError as e:
+            self.fail(f"'{format_filename(value)}': {e.strerror}", param, ctx)
 
     def shell_complete(
         self, ctx: "Context", param: "Parameter", incomplete: str
@@ -748,6 +759,10 @@ class File(ParamType):
         from click.shell_completion import CompletionItem
 
         return [CompletionItem(incomplete, type="file")]
+
+
+def _is_file_like(value: t.Any) -> "te.TypeGuard[t.IO[t.Any]]":
+    return hasattr(value, "read") or hasattr(value, "write")
 
 
 class Path(ParamType):
@@ -777,13 +792,13 @@ class Path(ParamType):
         Added the ``executable`` parameter.
 
     .. versionchanged:: 8.0
-        Allow passing ``type=pathlib.Path``.
+        Allow passing ``path_type=pathlib.Path``.
 
     .. versionchanged:: 6.0
         Added the ``allow_dash`` parameter.
     """
 
-    envvar_list_splitter = os.path.pathsep
+    envvar_list_splitter: t.ClassVar[str] = os.path.pathsep
 
     def __init__(
         self,
@@ -794,7 +809,7 @@ class Path(ParamType):
         readable: bool = True,
         resolve_path: bool = False,
         allow_dash: bool = False,
-        path_type: t.Optional[t.Type] = None,
+        path_type: t.Optional[t.Type[t.Any]] = None,
         executable: bool = False,
     ):
         self.exists = exists
@@ -808,7 +823,7 @@ class Path(ParamType):
         self.type = path_type
 
         if self.file_okay and not self.dir_okay:
-            self.name = _("file")
+            self.name: str = _("file")
         elif self.dir_okay and not self.file_okay:
             self.name = _("directory")
         else:
@@ -826,20 +841,25 @@ class Path(ParamType):
         )
         return info_dict
 
-    def coerce_path_result(self, rv: t.Any) -> t.Any:
-        if self.type is not None and not isinstance(rv, self.type):
+    def coerce_path_result(
+        self, value: "t.Union[str, os.PathLike[str]]"
+    ) -> "t.Union[str, bytes, os.PathLike[str]]":
+        if self.type is not None and not isinstance(value, self.type):
             if self.type is str:
-                rv = os.fsdecode(rv)
+                return os.fsdecode(value)
             elif self.type is bytes:
-                rv = os.fsencode(rv)
+                return os.fsencode(value)
             else:
-                rv = self.type(rv)
+                return t.cast("os.PathLike[str]", self.type(value))
 
-        return rv
+        return value
 
     def convert(
-        self, value: t.Any, param: t.Optional["Parameter"], ctx: t.Optional["Context"]
-    ) -> t.Any:
+        self,
+        value: "t.Union[str, os.PathLike[str]]",
+        param: t.Optional["Parameter"],
+        ctx: t.Optional["Context"],
+    ) -> "t.Union[str, bytes, os.PathLike[str]]":
         rv = value
 
         is_dash = self.file_okay and self.allow_dash and rv in (b"-", "-")
@@ -859,7 +879,7 @@ class Path(ParamType):
                     return self.coerce_path_result(rv)
                 self.fail(
                     _("{name} {filename!r} does not exist.").format(
-                        name=self.name.title(), filename=os.fsdecode(value)
+                        name=self.name.title(), filename=format_filename(value)
                     ),
                     param,
                     ctx,
@@ -868,15 +888,15 @@ class Path(ParamType):
             if not self.file_okay and stat.S_ISREG(st.st_mode):
                 self.fail(
                     _("{name} {filename!r} is a file.").format(
-                        name=self.name.title(), filename=os.fsdecode(value)
+                        name=self.name.title(), filename=format_filename(value)
                     ),
                     param,
                     ctx,
                 )
             if not self.dir_okay and stat.S_ISDIR(st.st_mode):
                 self.fail(
-                    _("{name} '{filename}' is a directory.").format(
-                        name=self.name.title(), filename=os.fsdecode(value)
+                    _("{name} {filename!r} is a directory.").format(
+                        name=self.name.title(), filename=format_filename(value)
                     ),
                     param,
                     ctx,
@@ -885,7 +905,7 @@ class Path(ParamType):
             if self.readable and not os.access(rv, os.R_OK):
                 self.fail(
                     _("{name} {filename!r} is not readable.").format(
-                        name=self.name.title(), filename=os.fsdecode(value)
+                        name=self.name.title(), filename=format_filename(value)
                     ),
                     param,
                     ctx,
@@ -894,7 +914,7 @@ class Path(ParamType):
             if self.writable and not os.access(rv, os.W_OK):
                 self.fail(
                     _("{name} {filename!r} is not writable.").format(
-                        name=self.name.title(), filename=os.fsdecode(value)
+                        name=self.name.title(), filename=format_filename(value)
                     ),
                     param,
                     ctx,
@@ -903,7 +923,7 @@ class Path(ParamType):
             if self.executable and not os.access(value, os.X_OK):
                 self.fail(
                     _("{name} {filename!r} is not executable.").format(
-                        name=self.name.title(), filename=os.fsdecode(value)
+                        name=self.name.title(), filename=format_filename(value)
                     ),
                     param,
                     ctx,
@@ -944,8 +964,8 @@ class Tuple(CompositeParamType):
     :param types: a list of types that should be used for the tuple items.
     """
 
-    def __init__(self, types: t.Sequence[t.Union[t.Type, ParamType]]) -> None:
-        self.types = [convert_type(ty) for ty in types]
+    def __init__(self, types: t.Sequence[t.Union[t.Type[t.Any], ParamType]]) -> None:
+        self.types: t.Sequence[ParamType] = [convert_type(ty) for ty in types]
 
     def to_info_dict(self) -> t.Dict[str, t.Any]:
         info_dict = super().to_info_dict()

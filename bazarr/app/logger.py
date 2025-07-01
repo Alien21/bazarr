@@ -8,9 +8,9 @@ import platform
 import warnings
 
 from logging.handlers import TimedRotatingFileHandler
+from utilities.central import get_log_file_path
 from pytz_deprecation_shim import PytzUsageWarning
 
-from .get_args import args
 from .config import settings
 
 
@@ -55,34 +55,40 @@ class NoExceptionFormatter(logging.Formatter):
     def formatException(self, record):
         return ''
 
-    
+
 class UnwantedWaitressMessageFilter(logging.Filter):
     def filter(self, record):
-        if settings.general.debug == True:
-            # no filtering in debug mode
+        if settings.general.debug or "BAZARR" in record.msg:
+            # no filtering in debug mode or if originating from us
             return True
-            
-        unwantedMessages = [ 
-            "Exception while serving /api/socket.io/", 
-            ['Session is disconnected', 'Session not found' ],
-            
-            "Exception while serving /api/socket.io/", 
-            ["'Session is disconnected'", "'Session not found'" ],
-            
-            "Exception while serving /api/socket.io/", 
-            ['"Session is disconnected"', '"Session not found"' ]
+
+        if record.levelno < logging.ERROR:
+            return False
+
+        unwantedMessages = [
+            "Exception while serving /api/socket.io/",
+            ['Session is disconnected', 'Session not found'],
+
+            "Exception while serving /api/socket.io/",
+            ["'Session is disconnected'", "'Session not found'"],
+
+            "Exception while serving /api/socket.io/",
+            ['"Session is disconnected"', '"Session not found"'],
+
+            "Exception when servicing %r",
+            [],
         ]
-   
-        wanted = True    
+
+        wanted = True
         listLength = len(unwantedMessages)
         for i in range(0, listLength, 2):
             if record.msg == unwantedMessages[i]:
                 exceptionTuple = record.exc_info
-                if exceptionTuple != None:
-                    if str(exceptionTuple[1]) in unwantedMessages[i+1]:
+                if exceptionTuple is not None:
+                    if len(unwantedMessages[i+1]) == 0 or str(exceptionTuple[1]) in unwantedMessages[i+1]:
                         wanted = False
                         break
-        
+
         return wanted
 
 
@@ -91,10 +97,10 @@ def configure_logging(debug=False):
     warnings.simplefilter('ignore', category=PytzUsageWarning)
     # warnings.simplefilter('ignore', category=SAWarning)
 
-    if not debug:
-        log_level = "INFO"
+    if debug:
+        log_level = logging.DEBUG
     else:
-        log_level = "DEBUG"
+        log_level = logging.INFO
 
     logger.handlers = []
 
@@ -106,21 +112,21 @@ def configure_logging(debug=False):
         '%(asctime)-15s - %(name)-32s (%(thread)x) :  %(levelname)s (%(module)s:%(lineno)d) - %(message)s')
     ch.setFormatter(cf)
 
-    ch.setLevel(log_level)
+    ch.setLevel(logging.DEBUG)
     logger.addHandler(ch)
 
     # File Logging
     global fh
     if sys.version_info >= (3, 9):
-        fh = PatchedTimedRotatingFileHandler(os.path.join(args.config_dir, 'log/bazarr.log'), when="midnight",
+        fh = PatchedTimedRotatingFileHandler(get_log_file_path(), when="midnight",
                                              interval=1, backupCount=7, delay=True, encoding='utf-8')
     else:
-        fh = TimedRotatingFileHandler(os.path.join(args.config_dir, 'log/bazarr.log'), when="midnight", interval=1,
+        fh = TimedRotatingFileHandler(get_log_file_path(), when="midnight", interval=1,
                                       backupCount=7, delay=True, encoding='utf-8')
     f = FileHandlerFormatter('%(asctime)s|%(levelname)-8s|%(name)-32s|%(message)s|',
                              '%Y-%m-%d %H:%M:%S')
     fh.setFormatter(f)
-    fh.setLevel(log_level)
+    fh.setLevel(logging.DEBUG)
     logger.addHandler(fh)
 
     if debug:
@@ -136,6 +142,7 @@ def configure_logging(debug=False):
         logging.getLogger("ffsubsync.subtitle_parser").setLevel(logging.DEBUG)
         logging.getLogger("ffsubsync.speech_transformers").setLevel(logging.DEBUG)
         logging.getLogger("ffsubsync.ffsubsync").setLevel(logging.DEBUG)
+        logging.getLogger("ffsubsync.aligners").setLevel(logging.DEBUG)
         logging.getLogger("srt").setLevel(logging.DEBUG)
         logging.debug('Bazarr version: %s', os.environ["BAZARR_VERSION"])
         logging.debug('Bazarr branch: %s', settings.general.branch)
@@ -153,22 +160,28 @@ def configure_logging(debug=False):
         logging.getLogger("ffsubsync.subtitle_parser").setLevel(logging.ERROR)
         logging.getLogger("ffsubsync.speech_transformers").setLevel(logging.ERROR)
         logging.getLogger("ffsubsync.ffsubsync").setLevel(logging.ERROR)
+        logging.getLogger("ffsubsync.aligners").setLevel(logging.ERROR)
         logging.getLogger("srt").setLevel(logging.ERROR)
         logging.getLogger("SignalRCoreClient").setLevel(logging.CRITICAL)
         logging.getLogger("websocket").setLevel(logging.CRITICAL)
         logging.getLogger("ga4mp.ga4mp").setLevel(logging.ERROR)
 
-    logging.getLogger("waitress").setLevel(logging.ERROR)
-    logging.getLogger("waitress").addFilter(UnwantedWaitressMessageFilter())   
+    logging.getLogger("waitress").setLevel(logging.INFO)
+    logging.getLogger("waitress").addFilter(UnwantedWaitressMessageFilter())
     logging.getLogger("knowit").setLevel(logging.CRITICAL)
     logging.getLogger("enzyme").setLevel(logging.CRITICAL)
     logging.getLogger("guessit").setLevel(logging.WARNING)
     logging.getLogger("rebulk").setLevel(logging.WARNING)
     logging.getLogger("stevedore.extension").setLevel(logging.CRITICAL)
 
+def empty_file(filename):
+    # Open the log file in write mode to clear its contents
+    with open(filename, 'w'):
+        pass  # Just opening and closing the file will clear it
 
 def empty_log():
     fh.doRollover()
+    empty_file(get_log_file_path())
     logging.info('BAZARR Log file emptied')
 
 

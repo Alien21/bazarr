@@ -1,9 +1,18 @@
-import { render } from "@/tests";
+import { http } from "msw";
+import { HttpResponse } from "msw";
 import { describe, it } from "vitest";
+import { customRender } from "@/tests";
+import server from "@/tests/mocks/node";
 import App from ".";
 
 describe("App", () => {
   it("should render without crash", () => {
-    render(<App />);
+    server.use(
+      http.get("/api/system/searches", () => {
+        return HttpResponse.json({});
+      }),
+    );
+
+    customRender(<App />);
   });
 });

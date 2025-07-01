@@ -8,6 +8,7 @@ import tempfile
 import typing as t
 from types import TracebackType
 
+from . import _compat
 from . import formatting
 from . import termui
 from . import utils
@@ -79,11 +80,11 @@ class _NamedTextIOWrapper(io.TextIOWrapper):
 
 
 def make_input_stream(
-    input: t.Optional[t.Union[str, bytes, t.IO]], charset: str
+    input: t.Optional[t.Union[str, bytes, t.IO[t.Any]]], charset: str
 ) -> t.BinaryIO:
     # Is already an input stream.
     if hasattr(input, "read"):
-        rv = _find_binary_reader(t.cast(t.IO, input))
+        rv = _find_binary_reader(t.cast(t.IO[t.Any], input))
 
         if rv is not None:
             return rv
@@ -95,7 +96,7 @@ def make_input_stream(
     elif isinstance(input, str):
         input = input.encode(charset)
 
-    return io.BytesIO(t.cast(bytes, input))
+    return io.BytesIO(input)
 
 
 class Result:
@@ -183,7 +184,7 @@ class CliRunner:
         mix_stderr: bool = True,
     ) -> None:
         self.charset = charset
-        self.env = env or {}
+        self.env: t.Mapping[str, t.Optional[str]] = env or {}
         self.echo_stdin = echo_stdin
         self.mix_stderr = mix_stderr
 
@@ -206,7 +207,7 @@ class CliRunner:
     @contextlib.contextmanager
     def isolation(
         self,
-        input: t.Optional[t.Union[str, bytes, t.IO]] = None,
+        input: t.Optional[t.Union[str, bytes, t.IO[t.Any]]] = None,
         env: t.Optional[t.Mapping[str, t.Optional[str]]] = None,
         color: bool = False,
     ) -> t.Iterator[t.Tuple[io.BytesIO, t.Optional[io.BytesIO]]]:
@@ -301,7 +302,7 @@ class CliRunner:
         default_color = color
 
         def should_strip_ansi(
-            stream: t.Optional[t.IO] = None, color: t.Optional[bool] = None
+            stream: t.Optional[t.IO[t.Any]] = None, color: t.Optional[bool] = None
         ) -> bool:
             if color is None:
                 return not default_color
@@ -311,10 +312,12 @@ class CliRunner:
         old_hidden_prompt_func = termui.hidden_prompt_func
         old__getchar_func = termui._getchar
         old_should_strip_ansi = utils.should_strip_ansi  # type: ignore
+        old__compat_should_strip_ansi = _compat.should_strip_ansi
         termui.visible_prompt_func = visible_input
         termui.hidden_prompt_func = hidden_input
         termui._getchar = _getchar
         utils.should_strip_ansi = should_strip_ansi  # type: ignore
+        _compat.should_strip_ansi = should_strip_ansi
 
         old_env = {}
         try:
@@ -344,13 +347,14 @@ class CliRunner:
             termui.hidden_prompt_func = old_hidden_prompt_func
             termui._getchar = old__getchar_func
             utils.should_strip_ansi = old_should_strip_ansi  # type: ignore
+            _compat.should_strip_ansi = old__compat_should_strip_ansi
             formatting.FORCED_WIDTH = old_forced_width
 
     def invoke(
         self,
         cli: "BaseCommand",
         args: t.Optional[t.Union[str, t.Sequence[str]]] = None,
-        input: t.Optional[t.Union[str, bytes, t.IO]] = None,
+        input: t.Optional[t.Union[str, bytes, t.IO[t.Any]]] = None,
         env: t.Optional[t.Mapping[str, t.Optional[str]]] = None,
         catch_exceptions: bool = True,
         color: bool = False,
@@ -449,7 +453,7 @@ class CliRunner:
 
     @contextlib.contextmanager
     def isolated_filesystem(
-        self, temp_dir: t.Optional[t.Union[str, os.PathLike]] = None
+        self, temp_dir: t.Optional[t.Union[str, "os.PathLike[str]"]] = None
     ) -> t.Iterator[str]:
         """A context manager that creates a temporary directory and
         changes the current working directory to it. This isolates tests
@@ -464,16 +468,16 @@ class CliRunner:
             Added the ``temp_dir`` parameter.
         """
         cwd = os.getcwd()
-        dt = tempfile.mkdtemp(dir=temp_dir)  # type: ignore[type-var]
+        dt = tempfile.mkdtemp(dir=temp_dir)
         os.chdir(dt)
 
         try:
-            yield t.cast(str, dt)
+            yield dt
         finally:
             os.chdir(cwd)
 
             if temp_dir is None:
                 try:
                     shutil.rmtree(dt)
-                except OSError:  # noqa: B014
+                except OSError:
                     pass

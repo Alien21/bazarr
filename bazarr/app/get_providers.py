@@ -15,7 +15,7 @@ import re
 from requests import ConnectionError
 from subzero.language import Language
 from subliminal_patch.exceptions import TooManyRequests, APIThrottled, ParseResponseError, IPAddressBlocked, \
-    MustGetBlacklisted, SearchLimitReached
+    MustGetBlacklisted, SearchLimitReached, ProviderError
 from subliminal.providers.opensubtitles import DownloadLimitReached, PaymentRequired, Unauthorized
 from subliminal.exceptions import DownloadLimitExceeded, ServiceUnavailable, AuthenticationError, ConfigurationError
 from subliminal import region as subliminal_cache_region
@@ -30,7 +30,6 @@ from radarr.blacklist import blacklist_log_movie
 from sonarr.blacklist import blacklist_log
 from utilities.analytics import event_tracker
 
-
 _TRACEBACK_RE = re.compile(r'File "(.*?providers[\\/].*?)", line (\d+)')
 
 
@@ -41,7 +40,7 @@ def time_until_midnight(timezone):
     """
     now_in_tz = datetime.datetime.now(tz=timezone)
     midnight = now_in_tz.replace(hour=0, minute=0, second=0, microsecond=0) + \
-        datetime.timedelta(days=1)
+               datetime.timedelta(days=1)
     return midnight - now_in_tz
 
 
@@ -91,7 +90,7 @@ def provider_throttle_map():
         },
         "opensubtitlescom": {
             TooManyRequests: (datetime.timedelta(minutes=1), "1 minute"),
-            DownloadLimitExceeded: (datetime.timedelta(hours=24), "24 hours"),
+            DownloadLimitExceeded: (datetime.timedelta(hours=6), "6 hours"),
         },
         "addic7ed": {
             DownloadLimitExceeded: (datetime.timedelta(hours=3), "3 hours"),
@@ -100,6 +99,9 @@ def provider_throttle_map():
         },
         "titlovi": {
             TooManyRequests: (datetime.timedelta(minutes=5), "5 minutes"),
+        },
+        "titrari": {
+            TooManyRequests: (datetime.timedelta(minutes=10), "10 minutes"),
         },
         "titulky": {
             DownloadLimitExceeded: (
@@ -121,11 +123,16 @@ def provider_throttle_map():
         "whisperai": {
             ConnectionError: (datetime.timedelta(hours=24), "24 hours"),
         },
+        "regielive": {
+            APIThrottled: (datetime.timedelta(hours=1), "1 hour"),
+            TooManyRequests: (datetime.timedelta(minutes=5), "5 minutes"),
+            ProviderError: (datetime.timedelta(minutes=10), "10 minutes"),
+        },
     }
 
 
 PROVIDERS_FORCED_OFF = ["addic7ed", "tvsubtitles", "legendasdivx", "napiprojekt", "shooter",
-                        "hosszupuska", "supersubtitles", "titlovi", "assrt", "subscene"]
+                        "hosszupuska", "supersubtitles", "titlovi", "assrt"]
 
 throttle_count = {}
 
@@ -229,6 +236,14 @@ def get_providers_auth():
             'user_agent': settings.addic7ed.user_agent,
             'is_vip': settings.addic7ed.vip,
         },
+        'avistaz': {
+            'cookies': settings.avistaz.cookies,
+            'user_agent': settings.avistaz.user_agent,
+        },
+        'cinemaz': {
+            'cookies': settings.cinemaz.cookies,
+            'user_agent': settings.cinemaz.user_agent,
+        },
         'opensubtitles': {
             'username': settings.opensubtitles.username,
             'password': settings.opensubtitles.password,
@@ -246,20 +261,21 @@ def get_providers_auth():
                              'include_ai_translated': settings.opensubtitlescom.include_ai_translated,
                              'api_key': 's38zmzVlW7IlYruWi7mHwDYl2SfMQoC1'
                              },
+        'napiprojekt': {'only_authors': settings.napiprojekt.only_authors,
+                        'only_real_names': settings.napiprojekt.only_real_names},
         'podnapisi': {
             'only_foreign': False,  # fixme
             'also_foreign': False,  # fixme
             'verify_ssl': settings.podnapisi.verify_ssl
         },
-        'subscene': {
-            'username': settings.subscene.username,
-            'password': settings.subscene.password,
-            'only_foreign': False,  # fixme
-        },
         'legendasdivx': {
             'username': settings.legendasdivx.username,
             'password': settings.legendasdivx.password,
             'skip_wrong_fps': settings.legendasdivx.skip_wrong_fps,
+        },
+        'legendasnet': {
+            'username': settings.legendasnet.username,
+            'password': settings.legendasnet.password,
         },
         'xsubs': {
             'username': settings.xsubs.username,
@@ -277,10 +293,17 @@ def get_providers_auth():
             'username': settings.titulky.username,
             'password': settings.titulky.password,
             'approved_only': settings.titulky.approved_only,
+            'skip_wrong_fps': settings.titulky.skip_wrong_fps,
         },
         'titlovi': {
             'username': settings.titlovi.username,
             'password': settings.titlovi.password,
+        },
+        'jimaku': {
+            'api_key': settings.jimaku.api_key,
+            'enable_name_search_fallback': settings.jimaku.enable_name_search_fallback,
+            'enable_archives_download': settings.jimaku.enable_archives_download,
+            'enable_ai_subs': settings.jimaku.enable_ai_subs,
         },
         'ktuvit': {
             'email': settings.ktuvit.email,
@@ -293,7 +316,8 @@ def get_providers_auth():
             'ffprobe_path': _FFPROBE_BINARY,
             'ffmpeg_path': _FFMPEG_BINARY,
             'timeout': settings.embeddedsubtitles.timeout,
-            'unknown_as_english': settings.embeddedsubtitles.unknown_as_english,
+            'unknown_as_fallback': settings.embeddedsubtitles.unknown_as_fallback,
+            'fallback_lang': settings.embeddedsubtitles.fallback_lang,
         },
         'karagarga': {
             'username': settings.karagarga.username,
@@ -314,7 +338,18 @@ def get_providers_auth():
             'response': settings.whisperai.response,
             'timeout': settings.whisperai.timeout,
             'ffmpeg_path': _FFMPEG_BINARY,
-            'loglevel': settings.whisperai.loglevel,            
+            'loglevel': settings.whisperai.loglevel,
+            'pass_video_name': settings.whisperai.pass_video_name,
+        },
+        "animetosho": {
+            'search_threshold': settings.animetosho.search_threshold,
+        },
+        "subdl": {
+            'api_key': settings.subdl.api_key,
+        },
+        'turkcealtyaziorg': {
+            'cookies': settings.turkcealtyaziorg.cookies,
+            'user_agent': settings.turkcealtyaziorg.user_agent,
         }
     }
 
@@ -347,7 +382,7 @@ def provider_throttle(name, exception, ids=None, language=None):
                 cls = valid_cls
 
     throttle_data = provider_throttle_map().get(name, provider_throttle_map()["default"]).get(cls, None) or \
-        provider_throttle_map()["default"].get(cls, None)
+                    provider_throttle_map()["default"].get(cls, None)
 
     if throttle_data:
         throttle_delta, throttle_description = throttle_data
@@ -357,7 +392,8 @@ def provider_throttle(name, exception, ids=None, language=None):
     throttle_until = datetime.datetime.now() + throttle_delta
 
     if cls_name not in VALID_COUNT_EXCEPTIONS or throttled_count(name):
-        if cls_name == 'ValueError' and isinstance(exception.args, tuple) and len(exception.args) and exception.args[0].startswith('unsupported pickle protocol'):
+        if cls_name == 'ValueError' and isinstance(exception.args, tuple) and len(exception.args) and exception.args[
+            0].startswith('unsupported pickle protocol'):
             for fn in subliminal_cache_region.backend.all_filenames:
                 try:
                     os.remove(fn)
@@ -489,7 +525,7 @@ def get_throttled_providers():
     except Exception:
         # set empty content in throttled_providers.dat
         logging.error("Invalid content in throttled_providers.dat. Resetting")
-        set_throttled_providers(providers)
+        set_throttled_providers(str(providers))
     finally:
         return providers
 

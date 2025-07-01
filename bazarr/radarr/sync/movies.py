@@ -5,6 +5,7 @@ import logging
 from constants import MINIMUM_VIDEO_SIZE
 
 from sqlalchemy.exc import IntegrityError
+from datetime import datetime
 
 from app.config import settings
 from utilities.path_mappings import path_mappings
@@ -21,9 +22,17 @@ from .parser import movieParser
 bool_map = {"True": True, "False": False}
 
 FEATURE_PREFIX = "SYNC_MOVIES "
+
+
 def trace(message):
     if settings.general.debug:
         logging.debug(FEATURE_PREFIX + message)
+
+
+def get_language_profiles():
+    return database.execute(
+        select(TableLanguagesProfiles.profileId, TableLanguagesProfiles.name, TableLanguagesProfiles.tag)).all()
+
 
 def update_all_movies():
     movies_full_scan_subtitles()
@@ -41,9 +50,10 @@ def get_movie_file_size_from_db(movie_path):
 # Update movies in DB
 def update_movie(updated_movie, send_event):
     try:
+        updated_movie['updated_at_timestamp'] = datetime.now()
         database.execute(
             update(TableMovies).values(updated_movie)
-            .where(TableMovies.tmdbId == updated_movie['tmdbId']))
+            .where(TableMovies.radarrId == updated_movie['radarrId']))
     except IntegrityError as e:
         logging.error(f"BAZARR cannot update movie {updated_movie['path']} because of {e}")
     else:
@@ -56,16 +66,18 @@ def update_movie(updated_movie, send_event):
 def get_movie_monitored_status(movie_id):
     existing_movie_monitored = database.execute(
         select(TableMovies.monitored)
-        .where(TableMovies.tmdbId == movie_id))\
+        .where(TableMovies.radarrId == str(movie_id)))\
         .first()
     if existing_movie_monitored is None:
         return True
     else:
         return bool_map[existing_movie_monitored[0]]
 
+
 # Insert new movies in DB
 def add_movie(added_movie, send_event):
     try:
+        added_movie['created_at_timestamp'] = datetime.now()
         database.execute(
             insert(TableMovies)
             .values(added_movie))
@@ -104,6 +116,7 @@ def update_movies(send_event=True):
     else:
         audio_profiles = get_profile_list()
         tagsDict = get_tags()
+        language_profiles = get_language_profiles()
 
         # Get movies data from radarr
         movies = get_movies_from_radarr_api(apikey_radarr=apikey_radarr)
@@ -111,16 +124,16 @@ def update_movies(send_event=True):
             return
         else:
             # Get current movies in DB
-            current_movies_id_db = [x.tmdbId for x in
+            current_movies_id_db = [x.radarrId for x in
                                     database.execute(
-                                        select(TableMovies.tmdbId))
+                                        select(TableMovies.radarrId))
                                     .all()]
             current_movies_db_kv = [x.items() for x in [y._asdict()['TableMovies'].__dict__ for y in
                                                         database.execute(
                                                             select(TableMovies))
                                                         .all()]]
 
-            current_movies_radarr = [str(movie['tmdbId']) for movie in movies if movie['hasFile'] and
+            current_movies_radarr = [movie['id'] for movie in movies if movie['hasFile'] and
                                      'movieFile' in movie and
                                      (movie['movieFile']['size'] > MINIMUM_VIDEO_SIZE or
                                       get_movie_file_size_from_db(movie['movieFile']['path']) > MINIMUM_VIDEO_SIZE)]
@@ -130,7 +143,7 @@ def update_movies(send_event=True):
             movies_deleted = []
             if len(movies_to_delete):
                 try:
-                    database.execute(delete(TableMovies).where(TableMovies.tmdbId.in_(movies_to_delete)))
+                    database.execute(delete(TableMovies).where(TableMovies.radarrId.in_(movies_to_delete)))
                 except IntegrityError as e:
                     logging.error(f"BAZARR cannot delete movies because of {e}")
                 else:
@@ -158,8 +171,8 @@ def update_movies(send_event=True):
                 # Only movies that Radarr says have files downloaded will be kept up to date in the DB
                 if movie['hasFile'] is True:
                     if 'movieFile' in movie:
-                        if sync_monitored:   
-                            if get_movie_monitored_status(movie['tmdbId']) != movie['monitored']:
+                        if sync_monitored:
+                            if get_movie_monitored_status(movie['id']) != movie['monitored']:
                                 # monitored status is not the same as our DB
                                 trace(f"{i}: (Monitor Status Mismatch) {movie['title']}")
                             elif not movie['monitored']:
@@ -171,9 +184,10 @@ def update_movies(send_event=True):
                                 get_movie_file_size_from_db(movie['movieFile']['path']) > MINIMUM_VIDEO_SIZE):
                             # Add/update movies from Radarr that have a movie file to current movies list
                             trace(f"{i}: (Processing) {movie['title']}")
-                            if str(movie['tmdbId']) in current_movies_id_db:
+                            if movie['id'] in current_movies_id_db:
                                 parsed_movie = movieParser(movie, action='update',
                                                            tags_dict=tagsDict,
+                                                           language_profiles=language_profiles,
                                                            movie_default_profile=movie_default_profile,
                                                            audio_profiles=audio_profiles)
                                 if not any([parsed_movie.items() <= x for x in current_movies_db_kv]):
@@ -182,24 +196,31 @@ def update_movies(send_event=True):
                             else:
                                 parsed_movie = movieParser(movie, action='insert',
                                                            tags_dict=tagsDict,
+                                                           language_profiles=language_profiles,
                                                            movie_default_profile=movie_default_profile,
                                                            audio_profiles=audio_profiles)
                                 add_movie(parsed_movie, send_event)
                                 movies_added.append(parsed_movie['title'])
                 else:
-                     trace(f"{i}: (Skipped File Missing) {movie['title']}")
-                     files_missing += 1
+                    trace(f"{i}: (Skipped File Missing) {movie['title']}")
+                    files_missing += 1
 
             if send_event:
-                hide_progress(id='movies_progress')
+                show_progress(id='movies_progress',
+                              header='Syncing movies...',
+                              name='',
+                              value=movies_count,
+                              count=movies_count)
 
-            trace(f"Skipped {files_missing} file missing movies out of {i}")
+            trace(f"Skipped {files_missing} file missing movies out of {movies_count}")
             if sync_monitored:
-                trace(f"Skipped {skipped_count} unmonitored movies out of {i}")
-                trace(f"Processed {i - files_missing - skipped_count} movies out of {i} " +
-                              f"with {len(movies_added)} added, {len(movies_updated)} updated and {len(movies_deleted)} deleted")
+                trace(f"Skipped {skipped_count} unmonitored movies out of {movies_count}")
+                trace(f"Processed {movies_count - files_missing - skipped_count} movies out of {movies_count} "
+                      f"with {len(movies_added)} added, {len(movies_updated)} updated and "
+                      f"{len(movies_deleted)} deleted")
             else:
-                trace(f"Processed {i - files_missing} movies out of {i} with {len(movies_added)} added and {len(movies_updated)} updated")
+                trace(f"Processed {movies_count - files_missing} movies out of {movies_count} with {len(movies_added)} added and "
+                      f"{len(movies_updated)} updated")
 
             logging.debug('BAZARR All movies synced from Radarr into database.')
 
@@ -241,6 +262,7 @@ def update_one_movie(movie_id, action, defer_search=False):
 
     audio_profiles = get_profile_list()
     tagsDict = get_tags()
+    language_profiles = get_language_profiles()
 
     try:
         # Get movie data from radarr api
@@ -250,10 +272,10 @@ def update_one_movie(movie_id, action, defer_search=False):
             return
         else:
             if action == 'updated' and existing_movie:
-                movie = movieParser(movie_data, action='update', tags_dict=tagsDict,
+                movie = movieParser(movie_data, action='update', tags_dict=tagsDict, language_profiles=language_profiles,
                                     movie_default_profile=movie_default_profile, audio_profiles=audio_profiles)
             elif action == 'updated' and not existing_movie:
-                movie = movieParser(movie_data, action='insert', tags_dict=tagsDict,
+                movie = movieParser(movie_data, action='insert', tags_dict=tagsDict, language_profiles=language_profiles,
                                     movie_default_profile=movie_default_profile, audio_profiles=audio_profiles)
     except Exception:
         logging.exception('BAZARR cannot get movie returned by SignalR feed from Radarr API.')
@@ -281,6 +303,7 @@ def update_one_movie(movie_id, action, defer_search=False):
     # Update existing movie in DB
     elif movie and existing_movie:
         try:
+            movie['updated_at_timestamp'] = datetime.now()
             database.execute(
                 update(TableMovies)
                 .values(movie)
@@ -297,6 +320,7 @@ def update_one_movie(movie_id, action, defer_search=False):
     # Insert new movie in DB
     elif movie and not existing_movie:
         try:
+            movie['created_at_timestamp'] = datetime.now()
             database.execute(
                 insert(TableMovies)
                 .values(movie))
@@ -309,16 +333,17 @@ def update_one_movie(movie_id, action, defer_search=False):
             logging.debug(
                 f'BAZARR inserted this movie into the database:{path_mappings.path_replace_movie(movie["path"])}')
 
-    # Storing existing subtitles
-    logging.debug(f'BAZARR storing subtitles for this movie: {path_mappings.path_replace_movie(movie["path"])}')
-    store_subtitles_movie(movie['path'], path_mappings.path_replace_movie(movie['path']))
-
     # Downloading missing subtitles
     if defer_search:
         logging.debug(
             f'BAZARR searching for missing subtitles is deferred until scheduled task execution for this movie: '
             f'{path_mappings.path_replace_movie(movie["path"])}')
     else:
-        logging.debug(
-            f'BAZARR downloading missing subtitles for this movie: {path_mappings.path_replace_movie(movie["path"])}')
-        movies_download_subtitles(movie_id)
+        mapped_movie_path = path_mappings.path_replace_movie(movie["path"])
+        if os.path.exists(mapped_movie_path):
+            logging.debug(f'BAZARR downloading missing subtitles for this movie: {mapped_movie_path}')
+            movies_download_subtitles(movie_id)
+        else:
+            logging.debug(f'BAZARR cannot find this file yet (Radarr may be slow to import movie between disks?). '
+                          f'Searching for missing subtitles is deferred until scheduled task execution for this movie: '
+                          f'{mapped_movie_path}')

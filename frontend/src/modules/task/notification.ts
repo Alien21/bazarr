@@ -1,7 +1,7 @@
-import { NotificationProps } from "@mantine/notifications";
+import { NotificationData } from "@mantine/notifications";
 
 export const notification = {
-  info: (title: string, message: string): NotificationProps => {
+  info: (title: string, message: string): NotificationData => {
     return {
       title,
       message,
@@ -9,7 +9,7 @@ export const notification = {
     };
   },
 
-  warn: (title: string, message: string): NotificationProps => {
+  warn: (title: string, message: string): NotificationData => {
     return {
       title,
       message,
@@ -18,7 +18,7 @@ export const notification = {
     };
   },
 
-  error: (title: string, message: string): NotificationProps => {
+  error: (title: string, message: string): NotificationData => {
     return {
       title,
       message,
@@ -32,8 +32,8 @@ export const notification = {
   progress: {
     pending: (
       id: string,
-      header: string
-    ): NotificationProps & { id: string } => {
+      header: string,
+    ): NotificationData & { id: string } => {
       return {
         id,
         title: header,
@@ -47,8 +47,8 @@ export const notification = {
       header: string,
       body: string,
       current: number,
-      total: number
-    ): NotificationProps & { id: string } => {
+      total: number,
+    ): NotificationData & { id: string } => {
       return {
         id,
         title: header,
@@ -57,7 +57,7 @@ export const notification = {
         autoClose: false,
       };
     },
-    end: (id: string, header: string): NotificationProps & { id: string } => {
+    end: (id: string, header: string): NotificationData & { id: string } => {
       return {
         id,
         title: header,

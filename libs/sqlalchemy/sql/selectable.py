@@ -1,5 +1,5 @@
 # sql/selectable.py
-# Copyright (C) 2005-2023 the SQLAlchemy authors and contributors
+# Copyright (C) 2005-2025 the SQLAlchemy authors and contributors
 # <see AUTHORS file>
 #
 # This module is part of SQLAlchemy and is released under
@@ -63,6 +63,7 @@ from .base import _EntityNamespace
 from .base import _expand_cloned
 from .base import _from_objects
 from .base import _generative
+from .base import _never_select_column
 from .base import _NoArg
 from .base import _select_iterables
 from .base import CacheableOptions
@@ -153,12 +154,10 @@ _LabelConventionCallable = Callable[
 
 class _JoinTargetProtocol(Protocol):
     @util.ro_non_memoized_property
-    def _from_objects(self) -> List[FromClause]:
-        ...
+    def _from_objects(self) -> List[FromClause]: ...
 
     @util.ro_non_memoized_property
-    def entity_namespace(self) -> _EntityNamespace:
-        ...
+    def entity_namespace(self) -> _EntityNamespace: ...
 
 
 _JoinTargetElement = Union["FromClause", _JoinTargetProtocol]
@@ -302,8 +301,6 @@ class Selectable(ReturnsRows):
         The return value is the :class:`_expression.Lateral` construct also
         provided by the top-level :func:`_expression.lateral` function.
 
-        .. versionadded:: 1.1
-
         .. seealso::
 
             :ref:`tutorial_lateral_correlation` -  overview of usage.
@@ -324,9 +321,7 @@ class Selectable(ReturnsRows):
         object, returning a copy of this :class:`_expression.FromClause`.
 
         """
-        return util.preloaded.sql_util.ClauseAdapter(alias).traverse(  # type: ignore  # noqa: E501
-            self
-        )
+        return util.preloaded.sql_util.ClauseAdapter(alias).traverse(self)
 
     def corresponding_column(
         self, column: KeyedColumnElement[Any], require_embedded: bool = False
@@ -397,8 +392,7 @@ class HasPrefixes:
             stmt = table.insert().prefix_with("LOW_PRIORITY", dialect="mysql")
 
             # MySQL 5.7 optimizer hints
-            stmt = select(table).prefix_with(
-                "/*+ BKA(t1) */", dialect="mysql")
+            stmt = select(table).prefix_with("/*+ BKA(t1) */", dialect="mysql")
 
         Multiple prefixes can be specified by multiple calls
         to :meth:`_expression.HasPrefixes.prefix_with`.
@@ -445,8 +439,13 @@ class HasSuffixes:
 
         E.g.::
 
-            stmt = select(col1, col2).cte().suffix_with(
-                "cycle empno set y_cycle to 1 default 0", dialect="oracle")
+            stmt = (
+                select(col1, col2)
+                .cte()
+                .suffix_with(
+                    "cycle empno set y_cycle to 1 default 0", dialect="oracle"
+                )
+            )
 
         Multiple suffixes can be specified by multiple calls
         to :meth:`_expression.HasSuffixes.suffix_with`.
@@ -468,9 +467,9 @@ class HasSuffixes:
 
 
 class HasHints:
-    _hints: util.immutabledict[
-        Tuple[FromClause, str], str
-    ] = util.immutabledict()
+    _hints: util.immutabledict[Tuple[FromClause, str], str] = (
+        util.immutabledict()
+    )
     _statement_hints: Tuple[Tuple[str, str], ...] = ()
 
     _has_hints_traverse_internals: _TraverseInternalsType = [
@@ -478,20 +477,29 @@ class HasHints:
         ("_hints", InternalTraversal.dp_table_hint_list),
     ]
 
+    @_generative
     def with_statement_hint(self, text: str, dialect_name: str = "*") -> Self:
         """Add a statement hint to this :class:`_expression.Select` or
         other selectable object.
 
-        This method is similar to :meth:`_expression.Select.with_hint`
-        except that
-        it does not require an individual table, and instead applies to the
-        statement as a whole.
+        .. tip::
+
+            :meth:`_expression.Select.with_statement_hint` generally adds hints
+            **at the trailing end** of a SELECT statement.  To place
+            dialect-specific hints such as optimizer hints at the **front** of
+            the SELECT statement after the SELECT keyword, use the
+            :meth:`_expression.Select.prefix_with` method for an open-ended
+            space, or for table-specific hints the
+            :meth:`_expression.Select.with_hint` may be used, which places
+            hints in a dialect-specific location.
+
+        This method is similar to :meth:`_expression.Select.with_hint` except
+        that it does not require an individual table, and instead applies to
+        the statement as a whole.
 
         Hints here are specific to the backend database and may include
         directives such as isolation levels, file directives, fetch directives,
         etc.
-
-        .. versionadded:: 1.0.0
 
         .. seealso::
 
@@ -499,7 +507,7 @@ class HasHints:
 
             :meth:`_expression.Select.prefix_with` - generic SELECT prefixing
             which also can suit some database-specific HINT syntaxes such as
-            MySQL optimizer hints
+            MySQL or Oracle Database optimizer hints
 
         """
         return self._with_hint(None, text, dialect_name)
@@ -515,6 +523,17 @@ class HasHints:
         selectable to this :class:`_expression.Select` or other selectable
         object.
 
+        .. tip::
+
+            The :meth:`_expression.Select.with_hint` method adds hints that are
+            **specific to a single table** to a statement, in a location that
+            is **dialect-specific**.  To add generic optimizer hints to the
+            **beginning** of a statement ahead of the SELECT keyword such as
+            for MySQL or Oracle Database, use the
+            :meth:`_expression.Select.prefix_with` method.  To add optimizer
+            hints to the **end** of a statement such as for PostgreSQL, use the
+            :meth:`_expression.Select.with_statement_hint` method.
+
         The text of the hint is rendered in the appropriate
         location for the database backend in use, relative
         to the given :class:`_schema.Table` or :class:`_expression.Alias`
@@ -522,27 +541,32 @@ class HasHints:
         ``selectable`` argument. The dialect implementation
         typically uses Python string substitution syntax
         with the token ``%(name)s`` to render the name of
-        the table or alias. E.g. when using Oracle, the
+        the table or alias. E.g. when using Oracle Database, the
         following::
 
-            select(mytable).\
-                with_hint(mytable, "index(%(name)s ix_mytable)")
+            select(mytable).with_hint(mytable, "index(%(name)s ix_mytable)")
 
-        Would render SQL as::
+        Would render SQL as:
+
+        .. sourcecode:: sql
 
             select /*+ index(mytable ix_mytable) */ ... from mytable
 
         The ``dialect_name`` option will limit the rendering of a particular
         hint to a particular backend. Such as, to add hints for both Oracle
-        and Sybase simultaneously::
+        Database and MSSql simultaneously::
 
-            select(mytable).\
-                with_hint(mytable, "index(%(name)s ix_mytable)", 'oracle').\
-                with_hint(mytable, "WITH INDEX ix_mytable", 'mssql')
+            select(mytable).with_hint(
+                mytable, "index(%(name)s ix_mytable)", "oracle"
+            ).with_hint(mytable, "WITH INDEX ix_mytable", "mssql")
 
         .. seealso::
 
             :meth:`_expression.Select.with_statement_hint`
+
+            :meth:`_expression.Select.prefix_with` - generic SELECT prefixing
+            which also can suit some database-specific HINT syntaxes such as
+            MySQL or Oracle Database optimizer hints
 
         """
 
@@ -646,11 +670,14 @@ class FromClause(roles.AnonymizedFromClauseRole, Selectable):
 
             from sqlalchemy import join
 
-            j = user_table.join(address_table,
-                            user_table.c.id == address_table.c.user_id)
+            j = user_table.join(
+                address_table, user_table.c.id == address_table.c.user_id
+            )
             stmt = select(user_table).select_from(j)
 
-        would emit SQL along the lines of::
+        would emit SQL along the lines of:
+
+        .. sourcecode:: sql
 
             SELECT user.id, user.name FROM user
             JOIN address ON user.id = address.user_id
@@ -670,8 +697,6 @@ class FromClause(roles.AnonymizedFromClauseRole, Selectable):
 
         :param full: if True, render a FULL OUTER JOIN, instead of LEFT OUTER
          JOIN.  Implies :paramref:`.FromClause.join.isouter`.
-
-         .. versionadded:: 1.1
 
         .. seealso::
 
@@ -698,15 +723,15 @@ class FromClause(roles.AnonymizedFromClauseRole, Selectable):
 
             from sqlalchemy import outerjoin
 
-            j = user_table.outerjoin(address_table,
-                            user_table.c.id == address_table.c.user_id)
+            j = user_table.outerjoin(
+                address_table, user_table.c.id == address_table.c.user_id
+            )
 
         The above is equivalent to::
 
             j = user_table.join(
-                address_table,
-                user_table.c.id == address_table.c.user_id,
-                isouter=True)
+                address_table, user_table.c.id == address_table.c.user_id, isouter=True
+            )
 
         :param right: the right side of the join; this is any
          :class:`_expression.FromClause` object such as a
@@ -722,15 +747,13 @@ class FromClause(roles.AnonymizedFromClauseRole, Selectable):
         :param full: if True, render a FULL OUTER JOIN, instead of
          LEFT OUTER JOIN.
 
-         .. versionadded:: 1.1
-
         .. seealso::
 
             :meth:`_expression.FromClause.join`
 
             :class:`_expression.Join`
 
-        """
+        """  # noqa: E501
 
         return Join(self, right, onclause, True, full)
 
@@ -741,7 +764,7 @@ class FromClause(roles.AnonymizedFromClauseRole, Selectable):
 
         E.g.::
 
-            a2 = some_table.alias('a2')
+            a2 = some_table.alias("a2")
 
         The above code creates an :class:`_expression.Alias`
         object which can be used
@@ -768,8 +791,6 @@ class FromClause(roles.AnonymizedFromClauseRole, Selectable):
         The return value is the :class:`_expression.TableSample`
         construct also
         provided by the top-level :func:`_expression.tablesample` function.
-
-        .. versionadded:: 1.1
 
         .. seealso::
 
@@ -880,7 +901,7 @@ class FromClause(roles.AnonymizedFromClauseRole, Selectable):
         This is the namespace that is used to resolve "filter_by()" type
         expressions, such as::
 
-            stmt.filter_by(address='some address')
+            stmt.filter_by(address="some address")
 
         It defaults to the ``.c`` collection, however internally it can
         be overridden using the "entity_namespace" annotation to deliver
@@ -940,7 +961,7 @@ class FromClause(roles.AnonymizedFromClauseRole, Selectable):
 
     @util.ro_non_memoized_property
     def _select_iterable(self) -> _SelectIterable:
-        return self.c
+        return (c for c in self.c if not _never_select_column(c))
 
     def _init_collections(self) -> None:
         assert "_columns" not in self.__dict__
@@ -999,8 +1020,7 @@ class FromClause(roles.AnonymizedFromClauseRole, Selectable):
 
         def self_group(
             self, against: Optional[OperatorType] = None
-        ) -> Union[FromGrouping, Self]:
-            ...
+        ) -> Union[FromGrouping, Self]: ...
 
 
 class NamedFromClause(FromClause):
@@ -1024,7 +1044,7 @@ class NamedFromClause(FromClause):
         A :class:`_sql.TableValuedColumn` is a :class:`_sql.ColumnElement` that
         represents a complete row in a table. Support for this construct is
         backend dependent, and is supported in various forms by backends
-        such as PostgreSQL, Oracle and SQL Server.
+        such as PostgreSQL, Oracle Database and SQL Server.
 
         E.g.:
 
@@ -1064,7 +1084,11 @@ class SelectLabelStyle(Enum):
         >>> from sqlalchemy import table, column, select, true, LABEL_STYLE_NONE
         >>> table1 = table("table1", column("columna"), column("columnb"))
         >>> table2 = table("table2", column("columna"), column("columnc"))
-        >>> print(select(table1, table2).join(table2, true()).set_label_style(LABEL_STYLE_NONE))
+        >>> print(
+        ...     select(table1, table2)
+        ...     .join(table2, true())
+        ...     .set_label_style(LABEL_STYLE_NONE)
+        ... )
         {printsql}SELECT table1.columna, table1.columnb, table2.columna, table2.columnc
         FROM table1 JOIN table2 ON true
 
@@ -1086,10 +1110,20 @@ class SelectLabelStyle(Enum):
 
     .. sourcecode:: pycon+sql
 
-        >>> from sqlalchemy import table, column, select, true, LABEL_STYLE_TABLENAME_PLUS_COL
+        >>> from sqlalchemy import (
+        ...     table,
+        ...     column,
+        ...     select,
+        ...     true,
+        ...     LABEL_STYLE_TABLENAME_PLUS_COL,
+        ... )
         >>> table1 = table("table1", column("columna"), column("columnb"))
         >>> table2 = table("table2", column("columna"), column("columnc"))
-        >>> print(select(table1, table2).join(table2, true()).set_label_style(LABEL_STYLE_TABLENAME_PLUS_COL))
+        >>> print(
+        ...     select(table1, table2)
+        ...     .join(table2, true())
+        ...     .set_label_style(LABEL_STYLE_TABLENAME_PLUS_COL)
+        ... )
         {printsql}SELECT table1.columna AS table1_columna, table1.columnb AS table1_columnb, table2.columna AS table2_columna, table2.columnc AS table2_columnc
         FROM table1 JOIN table2 ON true
 
@@ -1115,10 +1149,20 @@ class SelectLabelStyle(Enum):
 
     .. sourcecode:: pycon+sql
 
-        >>> from sqlalchemy import table, column, select, true, LABEL_STYLE_DISAMBIGUATE_ONLY
+        >>> from sqlalchemy import (
+        ...     table,
+        ...     column,
+        ...     select,
+        ...     true,
+        ...     LABEL_STYLE_DISAMBIGUATE_ONLY,
+        ... )
         >>> table1 = table("table1", column("columna"), column("columnb"))
         >>> table2 = table("table2", column("columna"), column("columnc"))
-        >>> print(select(table1, table2).join(table2, true()).set_label_style(LABEL_STYLE_DISAMBIGUATE_ONLY))
+        >>> print(
+        ...     select(table1, table2)
+        ...     .join(table2, true())
+        ...     .set_label_style(LABEL_STYLE_DISAMBIGUATE_ONLY)
+        ... )
         {printsql}SELECT table1.columna, table1.columnb, table2.columna AS columna_1, table2.columnc
         FROM table1 JOIN table2 ON true
 
@@ -1256,7 +1300,6 @@ class Join(roles.DMLTableRole, FromClause):
     def self_group(
         self, against: Optional[OperatorType] = None
     ) -> FromGrouping:
-        ...
         return FromGrouping(self)
 
     @util.preload_module("sqlalchemy.sql.util")
@@ -1429,7 +1472,7 @@ class Join(roles.DMLTableRole, FromClause):
                 continue
             for fk in sorted(
                 b.foreign_keys,
-                key=lambda fk: fk.parent._creation_order,  # type: ignore
+                key=lambda fk: fk.parent._creation_order,
             ):
                 if (
                     consider_as_foreign_keys is not None
@@ -1450,7 +1493,7 @@ class Join(roles.DMLTableRole, FromClause):
             if left is not b:
                 for fk in sorted(
                     left.foreign_keys,
-                    key=lambda fk: fk.parent._creation_order,  # type: ignore
+                    key=lambda fk: fk.parent._creation_order,
                 ):
                     if (
                         consider_as_foreign_keys is not None
@@ -1517,7 +1560,9 @@ class Join(roles.DMLTableRole, FromClause):
 
             stmt = stmt.select()
 
-        The above will produce a SQL string resembling::
+        The above will produce a SQL string resembling:
+
+        .. sourcecode:: sql
 
             SELECT table_a.id, table_a.col, table_b.id, table_b.a_id
             FROM table_a JOIN table_b ON table_a.id = table_b.a_id
@@ -1531,11 +1576,23 @@ class Join(roles.DMLTableRole, FromClause):
     ) -> TODO_Any:
         sqlutil = util.preloaded.sql_util
         if flat:
-            if name is not None:
-                raise exc.ArgumentError("Can't send name argument with flat")
+            if isinstance(self.left, (FromGrouping, Join)):
+                left_name = name  # will recurse
+            else:
+                if name and isinstance(self.left, NamedFromClause):
+                    left_name = f"{name}_{self.left.name}"
+                else:
+                    left_name = name
+            if isinstance(self.right, (FromGrouping, Join)):
+                right_name = name  # will recurse
+            else:
+                if name and isinstance(self.right, NamedFromClause):
+                    right_name = f"{name}_{self.right.name}"
+                else:
+                    right_name = name
             left_a, right_a = (
-                self.left._anonymous_fromclause(flat=True),
-                self.right._anonymous_fromclause(flat=True),
+                self.left._anonymous_fromclause(name=left_name, flat=flat),
+                self.right._anonymous_fromclause(name=right_name, flat=flat),
             )
             adapter = sqlutil.ClauseAdapter(left_a).chain(
                 sqlutil.ClauseAdapter(right_a)
@@ -1697,7 +1754,7 @@ class Alias(roles.DMLTableRole, FromClauseAlias):
 
     Represents an alias, as typically applied to any table or
     sub-select within a SQL statement using the ``AS`` keyword (or
-    without the keyword on certain databases such as Oracle).
+    without the keyword on certain databases such as Oracle Database).
 
     This object is constructed from the :func:`_expression.alias` module
     level function as well as the :meth:`_expression.FromClause.alias`
@@ -1739,7 +1796,9 @@ class TableValuedAlias(LateralFromClause, Alias):
     .. sourcecode:: pycon+sql
 
         >>> from sqlalchemy import select, func
-        >>> fn = func.json_array_elements_text('["one", "two", "three"]').table_valued("value")
+        >>> fn = func.json_array_elements_text('["one", "two", "three"]').table_valued(
+        ...     "value"
+        ... )
         >>> print(select(fn.c.value))
         {printsql}SELECT anon_1.value
         FROM json_array_elements_text(:json_array_elements_text_1) AS anon_1
@@ -1858,8 +1917,9 @@ class TableValuedAlias(LateralFromClause, Alias):
 
             >>> print(
             ...     select(
-            ...         func.unnest(array(["one", "two", "three"])).
-                        table_valued("x", with_ordinality="o").render_derived()
+            ...         func.unnest(array(["one", "two", "three"]))
+            ...         .table_valued("x", with_ordinality="o")
+            ...         .render_derived()
             ...     )
             ... )
             {printsql}SELECT anon_1.x, anon_1.o
@@ -1873,9 +1933,7 @@ class TableValuedAlias(LateralFromClause, Alias):
 
             >>> print(
             ...     select(
-            ...         func.json_to_recordset(
-            ...             '[{"a":1,"b":"foo"},{"a":"2","c":"bar"}]'
-            ...         )
+            ...         func.json_to_recordset('[{"a":1,"b":"foo"},{"a":"2","c":"bar"}]')
             ...         .table_valued(column("a", Integer), column("b", String))
             ...         .render_derived(with_types=True)
             ...     )
@@ -1922,8 +1980,6 @@ class Lateral(FromClauseAlias, LateralFromClause):
     While LATERAL is part of the SQL standard, currently only more recent
     PostgreSQL versions provide support for this keyword.
 
-    .. versionadded:: 1.1
-
     .. seealso::
 
         :ref:`tutorial_lateral_correlation` -  overview of usage.
@@ -1953,8 +2009,6 @@ class TableSample(FromClauseAlias):
     level function as well as the :meth:`_expression.FromClause.tablesample`
     method
     available on all :class:`_expression.FromClause` subclasses.
-
-    .. versionadded:: 1.1
 
     .. seealso::
 
@@ -2271,9 +2325,9 @@ class SelectsRows(ReturnsRows):
             repeated = False
 
             if not c._render_label_in_columns_clause:
-                effective_name = (
-                    required_label_name
-                ) = fallback_label_name = None
+                effective_name = required_label_name = fallback_label_name = (
+                    None
+                )
             elif label_style_none:
                 if TYPE_CHECKING:
                     assert is_column_element(c)
@@ -2285,9 +2339,9 @@ class SelectsRows(ReturnsRows):
                     assert is_column_element(c)
 
                 if table_qualified:
-                    required_label_name = (
-                        effective_name
-                    ) = fallback_label_name = c._tq_label
+                    required_label_name = effective_name = (
+                        fallback_label_name
+                    ) = c._tq_label
                 else:
                     effective_name = fallback_label_name = c._non_anon_label
                     required_label_name = None
@@ -2318,9 +2372,9 @@ class SelectsRows(ReturnsRows):
                         else:
                             fallback_label_name = c._anon_name_label
                     else:
-                        required_label_name = (
-                            effective_name
-                        ) = fallback_label_name = expr_label
+                        required_label_name = effective_name = (
+                            fallback_label_name
+                        ) = expr_label
 
             if effective_name is not None:
                 if TYPE_CHECKING:
@@ -2331,17 +2385,16 @@ class SelectsRows(ReturnsRows):
                     # c, use hash(), so that an annotated version of the column
                     # is seen as the same as the non-annotated
                     if hash(names[effective_name]) != hash(c):
-
                         # different column under the same name.  apply
                         # disambiguating label
                         if table_qualified:
-                            required_label_name = (
-                                fallback_label_name
-                            ) = c._anon_tq_label
+                            required_label_name = fallback_label_name = (
+                                c._anon_tq_label
+                            )
                         else:
-                            required_label_name = (
-                                fallback_label_name
-                            ) = c._anon_name_label
+                            required_label_name = fallback_label_name = (
+                                c._anon_name_label
+                            )
 
                         if anon_for_dupe_key and required_label_name in names:
                             # here, c._anon_tq_label is definitely unique to
@@ -2356,14 +2409,14 @@ class SelectsRows(ReturnsRows):
                             # subsequent occurrences of the column so that the
                             # original stays non-ambiguous
                             if table_qualified:
-                                required_label_name = (
-                                    fallback_label_name
-                                ) = c._dedupe_anon_tq_label_idx(dedupe_hash)
+                                required_label_name = fallback_label_name = (
+                                    c._dedupe_anon_tq_label_idx(dedupe_hash)
+                                )
                                 dedupe_hash += 1
                             else:
-                                required_label_name = (
-                                    fallback_label_name
-                                ) = c._dedupe_anon_label_idx(dedupe_hash)
+                                required_label_name = fallback_label_name = (
+                                    c._dedupe_anon_label_idx(dedupe_hash)
+                                )
                                 dedupe_hash += 1
                             repeated = True
                         else:
@@ -2372,14 +2425,14 @@ class SelectsRows(ReturnsRows):
                         # same column under the same name. apply the "dedupe"
                         # label so that the original stays non-ambiguous
                         if table_qualified:
-                            required_label_name = (
-                                fallback_label_name
-                            ) = c._dedupe_anon_tq_label_idx(dedupe_hash)
+                            required_label_name = fallback_label_name = (
+                                c._dedupe_anon_tq_label_idx(dedupe_hash)
+                            )
                             dedupe_hash += 1
                         else:
-                            required_label_name = (
-                                fallback_label_name
-                            ) = c._dedupe_anon_label_idx(dedupe_hash)
+                            required_label_name = fallback_label_name = (
+                                c._dedupe_anon_label_idx(dedupe_hash)
+                            )
                             dedupe_hash += 1
                         repeated = True
                 else:
@@ -2399,11 +2452,7 @@ class SelectsRows(ReturnsRows):
 
 
 class HasCTE(roles.HasCTERole, SelectsRows):
-    """Mixin that declares a class to include CTE support.
-
-    .. versionadded:: 1.1
-
-    """
+    """Mixin that declares a class to include CTE support."""
 
     _has_ctes_traverse_internals: _TraverseInternalsType = [
         ("_independent_ctes", InternalTraversal.dp_clauseelement_list),
@@ -2441,20 +2490,24 @@ class HasCTE(roles.HasCTERole, SelectsRows):
         E.g.::
 
             from sqlalchemy import table, column, select
-            t = table('t', column('c1'), column('c2'))
+
+            t = table("t", column("c1"), column("c2"))
 
             ins = t.insert().values({"c1": "x", "c2": "y"}).cte()
 
             stmt = select(t).add_cte(ins)
 
-        Would render::
+        Would render:
 
-            WITH anon_1 AS
-            (INSERT INTO t (c1, c2) VALUES (:param_1, :param_2))
+        .. sourcecode:: sql
+
+            WITH anon_1 AS (
+                INSERT INTO t (c1, c2) VALUES (:param_1, :param_2)
+            )
             SELECT t.c1, t.c2
             FROM t
 
-        Above, the "anon_1" CTE is not referred towards in the SELECT
+        Above, the "anon_1" CTE is not referenced in the SELECT
         statement, however still accomplishes the task of running an INSERT
         statement.
 
@@ -2466,9 +2519,7 @@ class HasCTE(roles.HasCTERole, SelectsRows):
 
             t = table("t", column("c1"), column("c2"))
 
-            delete_statement_cte = (
-                t.delete().where(t.c.c1 < 1).cte("deletions")
-            )
+            delete_statement_cte = t.delete().where(t.c.c1 < 1).cte("deletions")
 
             insert_stmt = insert(t).values({"c1": 1, "c2": 2})
             update_statement = insert_stmt.on_conflict_do_update(
@@ -2481,10 +2532,13 @@ class HasCTE(roles.HasCTERole, SelectsRows):
 
             print(update_statement)
 
-        The above statement renders as::
+        The above statement renders as:
 
-            WITH deletions AS
-            (DELETE FROM t WHERE t.c1 < %(c1_1)s)
+        .. sourcecode:: sql
+
+            WITH deletions AS (
+                DELETE FROM t WHERE t.c1 < %(c1_1)s
+            )
             INSERT INTO t (c1, c2) VALUES (%(c1)s, %(c2)s)
             ON CONFLICT (c1) DO UPDATE SET c1 = excluded.c1, c2 = excluded.c2
 
@@ -2508,10 +2562,8 @@ class HasCTE(roles.HasCTERole, SelectsRows):
             :paramref:`.HasCTE.cte.nesting`
 
 
-        """
-        opt = _CTEOpts(
-            nest_here,
-        )
+        """  # noqa: E501
+        opt = _CTEOpts(nest_here)
         for cte in ctes:
             cte = coercions.expect(roles.IsCTERole, cte)
             self._independent_ctes += (cte,)
@@ -2538,9 +2590,6 @@ class HasCTE(roles.HasCTERole, SelectsRows):
         and DELETE on some databases, both as a source of CTE rows
         when combined with RETURNING, as well as a consumer of
         CTE rows.
-
-        .. versionchanged:: 1.1 Added support for UPDATE/INSERT/DELETE as
-           CTE, CTEs added to UPDATE/INSERT/DELETE.
 
         SQLAlchemy detects :class:`_expression.CTE` objects, which are treated
         similarly to :class:`_expression.Alias` objects, as special elements
@@ -2582,95 +2631,123 @@ class HasCTE(roles.HasCTERole, SelectsRows):
 
         Example 1, non recursive::
 
-            from sqlalchemy import (Table, Column, String, Integer,
-                                    MetaData, select, func)
+            from sqlalchemy import (
+                Table,
+                Column,
+                String,
+                Integer,
+                MetaData,
+                select,
+                func,
+            )
 
             metadata = MetaData()
 
-            orders = Table('orders', metadata,
-                Column('region', String),
-                Column('amount', Integer),
-                Column('product', String),
-                Column('quantity', Integer)
+            orders = Table(
+                "orders",
+                metadata,
+                Column("region", String),
+                Column("amount", Integer),
+                Column("product", String),
+                Column("quantity", Integer),
             )
 
-            regional_sales = select(
-                                orders.c.region,
-                                func.sum(orders.c.amount).label('total_sales')
-                            ).group_by(orders.c.region).cte("regional_sales")
+            regional_sales = (
+                select(orders.c.region, func.sum(orders.c.amount).label("total_sales"))
+                .group_by(orders.c.region)
+                .cte("regional_sales")
+            )
 
 
-            top_regions = select(regional_sales.c.region).\
-                    where(
-                        regional_sales.c.total_sales >
-                        select(
-                            func.sum(regional_sales.c.total_sales) / 10
-                        )
-                    ).cte("top_regions")
+            top_regions = (
+                select(regional_sales.c.region)
+                .where(
+                    regional_sales.c.total_sales
+                    > select(func.sum(regional_sales.c.total_sales) / 10)
+                )
+                .cte("top_regions")
+            )
 
-            statement = select(
-                        orders.c.region,
-                        orders.c.product,
-                        func.sum(orders.c.quantity).label("product_units"),
-                        func.sum(orders.c.amount).label("product_sales")
-                ).where(orders.c.region.in_(
-                    select(top_regions.c.region)
-                )).group_by(orders.c.region, orders.c.product)
+            statement = (
+                select(
+                    orders.c.region,
+                    orders.c.product,
+                    func.sum(orders.c.quantity).label("product_units"),
+                    func.sum(orders.c.amount).label("product_sales"),
+                )
+                .where(orders.c.region.in_(select(top_regions.c.region)))
+                .group_by(orders.c.region, orders.c.product)
+            )
 
             result = conn.execute(statement).fetchall()
 
         Example 2, WITH RECURSIVE::
 
-            from sqlalchemy import (Table, Column, String, Integer,
-                                    MetaData, select, func)
+            from sqlalchemy import (
+                Table,
+                Column,
+                String,
+                Integer,
+                MetaData,
+                select,
+                func,
+            )
 
             metadata = MetaData()
 
-            parts = Table('parts', metadata,
-                Column('part', String),
-                Column('sub_part', String),
-                Column('quantity', Integer),
+            parts = Table(
+                "parts",
+                metadata,
+                Column("part", String),
+                Column("sub_part", String),
+                Column("quantity", Integer),
             )
 
-            included_parts = select(\
-                parts.c.sub_part, parts.c.part, parts.c.quantity\
-                ).\
-                where(parts.c.part=='our part').\
-                cte(recursive=True)
+            included_parts = (
+                select(parts.c.sub_part, parts.c.part, parts.c.quantity)
+                .where(parts.c.part == "our part")
+                .cte(recursive=True)
+            )
 
 
             incl_alias = included_parts.alias()
             parts_alias = parts.alias()
             included_parts = included_parts.union_all(
                 select(
-                    parts_alias.c.sub_part,
-                    parts_alias.c.part,
-                    parts_alias.c.quantity
-                ).\
-                where(parts_alias.c.part==incl_alias.c.sub_part)
+                    parts_alias.c.sub_part, parts_alias.c.part, parts_alias.c.quantity
+                ).where(parts_alias.c.part == incl_alias.c.sub_part)
             )
 
             statement = select(
-                        included_parts.c.sub_part,
-                        func.sum(included_parts.c.quantity).
-                          label('total_quantity')
-                    ).\
-                    group_by(included_parts.c.sub_part)
+                included_parts.c.sub_part,
+                func.sum(included_parts.c.quantity).label("total_quantity"),
+            ).group_by(included_parts.c.sub_part)
 
             result = conn.execute(statement).fetchall()
 
         Example 3, an upsert using UPDATE and INSERT with CTEs::
 
             from datetime import date
-            from sqlalchemy import (MetaData, Table, Column, Integer,
-                                    Date, select, literal, and_, exists)
+            from sqlalchemy import (
+                MetaData,
+                Table,
+                Column,
+                Integer,
+                Date,
+                select,
+                literal,
+                and_,
+                exists,
+            )
 
             metadata = MetaData()
 
-            visitors = Table('visitors', metadata,
-                Column('product_id', Integer, primary_key=True),
-                Column('date', Date, primary_key=True),
-                Column('count', Integer),
+            visitors = Table(
+                "visitors",
+                metadata,
+                Column("product_id", Integer, primary_key=True),
+                Column("date", Date, primary_key=True),
+                Column("count", Integer),
             )
 
             # add 5 visitors for the product_id == 1
@@ -2680,31 +2757,31 @@ class HasCTE(roles.HasCTERole, SelectsRows):
 
             update_cte = (
                 visitors.update()
-                .where(and_(visitors.c.product_id == product_id,
-                            visitors.c.date == day))
+                .where(
+                    and_(visitors.c.product_id == product_id, visitors.c.date == day)
+                )
                 .values(count=visitors.c.count + count)
                 .returning(literal(1))
-                .cte('update_cte')
+                .cte("update_cte")
             )
 
             upsert = visitors.insert().from_select(
                 [visitors.c.product_id, visitors.c.date, visitors.c.count],
-                select(literal(product_id), literal(day), literal(count))
-                    .where(~exists(update_cte.select()))
+                select(literal(product_id), literal(day), literal(count)).where(
+                    ~exists(update_cte.select())
+                ),
             )
 
             connection.execute(upsert)
 
         Example 4, Nesting CTE (SQLAlchemy 1.4.24 and above)::
 
-            value_a = select(
-                literal("root").label("n")
-            ).cte("value_a")
+            value_a = select(literal("root").label("n")).cte("value_a")
 
             # A nested CTE with the same name as the root one
-            value_a_nested = select(
-                literal("nesting").label("n")
-            ).cte("value_a", nesting=True)
+            value_a_nested = select(literal("nesting").label("n")).cte(
+                "value_a", nesting=True
+            )
 
             # Nesting CTEs takes ascendency locally
             # over the CTEs at a higher level
@@ -2713,7 +2790,9 @@ class HasCTE(roles.HasCTERole, SelectsRows):
             value_ab = select(value_a.c.n.label("a"), value_b.c.n.label("b"))
 
         The above query will render the second CTE nested inside the first,
-        shown with inline parameters below as::
+        shown with inline parameters below as:
+
+        .. sourcecode:: sql
 
             WITH
                 value_a AS
@@ -2728,21 +2807,17 @@ class HasCTE(roles.HasCTERole, SelectsRows):
         The same CTE can be set up using the :meth:`.HasCTE.add_cte` method
         as follows (SQLAlchemy 2.0 and above)::
 
-            value_a = select(
-                literal("root").label("n")
-            ).cte("value_a")
+            value_a = select(literal("root").label("n")).cte("value_a")
 
             # A nested CTE with the same name as the root one
-            value_a_nested = select(
-                literal("nesting").label("n")
-            ).cte("value_a")
+            value_a_nested = select(literal("nesting").label("n")).cte("value_a")
 
             # Nesting CTEs takes ascendency locally
             # over the CTEs at a higher level
             value_b = (
-                select(value_a_nested.c.n).
-                add_cte(value_a_nested, nest_here=True).
-                cte("value_b")
+                select(value_a_nested.c.n)
+                .add_cte(value_a_nested, nest_here=True)
+                .cte("value_b")
             )
 
             value_ab = select(value_a.c.n.label("a"), value_b.c.n.label("b"))
@@ -2757,9 +2832,7 @@ class HasCTE(roles.HasCTERole, SelectsRows):
                 Column("right", Integer),
             )
 
-            root_node = select(literal(1).label("node")).cte(
-                "nodes", recursive=True
-            )
+            root_node = select(literal(1).label("node")).cte("nodes", recursive=True)
 
             left_edge = select(edge.c.left).join(
                 root_node, edge.c.right == root_node.c.node
@@ -2772,7 +2845,9 @@ class HasCTE(roles.HasCTERole, SelectsRows):
 
             subgraph = select(subgraph_cte)
 
-        The above query will render 2 UNIONs inside the recursive CTE::
+        The above query will render 2 UNIONs inside the recursive CTE:
+
+        .. sourcecode:: sql
 
             WITH RECURSIVE nodes(node) AS (
                     SELECT 1 AS node
@@ -2790,7 +2865,7 @@ class HasCTE(roles.HasCTERole, SelectsRows):
             :meth:`_orm.Query.cte` - ORM version of
             :meth:`_expression.HasCTE.cte`.
 
-        """
+        """  # noqa: E501
         return CTE._construct(
             self, name=name, recursive=recursive, nesting=nesting
         )
@@ -2915,6 +2990,12 @@ class FromGrouping(GroupedElement, FromClause):
     def __setstate__(self, state: Dict[str, FromClause]) -> None:
         self.element = state["element"]
 
+    if TYPE_CHECKING:
+
+        def self_group(
+            self, against: Optional[OperatorType] = None
+        ) -> Self: ...
+
 
 class NamedFromGrouping(FromGrouping, NamedFromClause):
     """represent a grouping of a named FROM clause
@@ -2924,6 +3005,12 @@ class NamedFromGrouping(FromGrouping, NamedFromClause):
     """
 
     inherit_cache = True
+
+    if TYPE_CHECKING:
+
+        def self_group(
+            self, against: Optional[OperatorType] = None
+        ) -> Self: ...
 
 
 class TableClause(roles.DMLTableRole, Immutable, NamedFromClause):
@@ -2935,10 +3022,11 @@ class TableClause(roles.DMLTableRole, Immutable, NamedFromClause):
 
         from sqlalchemy import table, column
 
-        user = table("user",
-                column("id"),
-                column("name"),
-                column("description"),
+        user = table(
+            "user",
+            column("id"),
+            column("name"),
+            column("description"),
         )
 
     The :class:`_expression.TableClause` construct serves as the base for
@@ -3003,12 +3091,12 @@ class TableClause(roles.DMLTableRole, Immutable, NamedFromClause):
     if TYPE_CHECKING:
 
         @util.ro_non_memoized_property
-        def columns(self) -> ReadOnlyColumnCollection[str, ColumnClause[Any]]:
-            ...
+        def columns(
+            self,
+        ) -> ReadOnlyColumnCollection[str, ColumnClause[Any]]: ...
 
         @util.ro_non_memoized_property
-        def c(self) -> ReadOnlyColumnCollection[str, ColumnClause[Any]]:
-            ...
+        def c(self) -> ReadOnlyColumnCollection[str, ColumnClause[Any]]: ...
 
     def __str__(self) -> str:
         if self.schema is not None:
@@ -3044,7 +3132,7 @@ class TableClause(roles.DMLTableRole, Immutable, NamedFromClause):
 
         E.g.::
 
-            table.insert().values(name='foo')
+            table.insert().values(name="foo")
 
         See :func:`_expression.insert` for argument and usage information.
 
@@ -3059,7 +3147,7 @@ class TableClause(roles.DMLTableRole, Immutable, NamedFromClause):
 
         E.g.::
 
-            table.update().where(table.c.id==7).values(name='foo')
+            table.update().where(table.c.id == 7).values(name="foo")
 
         See :func:`_expression.update` for argument and usage information.
 
@@ -3075,7 +3163,7 @@ class TableClause(roles.DMLTableRole, Immutable, NamedFromClause):
 
         E.g.::
 
-            table.delete().where(table.c.id==7)
+            table.delete().where(table.c.id == 7)
 
         See :func:`_expression.delete` for argument and usage information.
 
@@ -3087,12 +3175,16 @@ class TableClause(roles.DMLTableRole, Immutable, NamedFromClause):
         return [self]
 
 
+ForUpdateParameter = Union["ForUpdateArg", None, bool, Dict[str, Any]]
+
+
 class ForUpdateArg(ClauseElement):
     _traverse_internals: _TraverseInternalsType = [
         ("of", InternalTraversal.dp_clauseelement_list),
         ("nowait", InternalTraversal.dp_boolean),
         ("read", InternalTraversal.dp_boolean),
         ("skip_locked", InternalTraversal.dp_boolean),
+        ("key_share", InternalTraversal.dp_boolean),
     ]
 
     of: Optional[Sequence[ClauseElement]]
@@ -3102,7 +3194,7 @@ class ForUpdateArg(ClauseElement):
 
     @classmethod
     def _from_argument(
-        cls, with_for_update: Union[ForUpdateArg, None, bool, Dict[str, Any]]
+        cls, with_for_update: ForUpdateParameter
     ) -> Optional[ForUpdateArg]:
         if isinstance(with_for_update, ForUpdateArg):
             return with_for_update
@@ -3169,7 +3261,7 @@ class Values(roles.InElementRole, Generative, LateralFromClause):
 
     __visit_name__ = "values"
 
-    _data: Tuple[List[Tuple[Any, ...]], ...] = ()
+    _data: Tuple[Sequence[Tuple[Any, ...]], ...] = ()
 
     _unnamed: bool
     _traverse_internals: _TraverseInternalsType = [
@@ -3187,6 +3279,7 @@ class Values(roles.InElementRole, Generative, LateralFromClause):
     ):
         super().__init__()
         self._column_args = columns
+
         if name is None:
             self._unnamed = True
             self.name = _anonymous_label.safe_construct(id(self), "anon")
@@ -3202,7 +3295,6 @@ class Values(roles.InElementRole, Generative, LateralFromClause):
 
     @_generative
     def alias(self, name: Optional[str] = None, flat: bool = False) -> Self:
-
         """Return a new :class:`_expression.Values`
         construct that is a copy of this
         one with the given name.
@@ -3253,13 +3345,13 @@ class Values(roles.InElementRole, Generative, LateralFromClause):
         return self
 
     @_generative
-    def data(self, values: List[Tuple[Any, ...]]) -> Self:
+    def data(self, values: Sequence[Tuple[Any, ...]]) -> Self:
         """Return a new :class:`_expression.Values` construct,
         adding the given data to the data list.
 
         E.g.::
 
-            my_values = my_values.data([(1, 'value 1'), (2, 'value2')])
+            my_values = my_values.data([(1, "value 1"), (2, "value2")])
 
         :param values: a sequence (i.e. list) of tuples that map to the
          column expressions given in the :class:`_expression.Values`
@@ -3281,6 +3373,13 @@ class Values(roles.InElementRole, Generative, LateralFromClause):
 
     def _populate_column_collection(self) -> None:
         for c in self._column_args:
+            if c.table is not None and c.table is not self:
+                _, c = c._make_proxy(self)
+            else:
+                # if the column was used in other contexts, ensure
+                # no memoizations of other FROM clauses.
+                # see test_values.py -> test_auto_proxy_select_direct_col
+                c._reset_memoizations()
             self._columns.add(c)
             c.table = self
 
@@ -3313,7 +3412,7 @@ class ScalarValues(roles.InElementRole, GroupedElement, ColumnElement[Any]):
     def __init__(
         self,
         columns: Sequence[ColumnClause[Any]],
-        data: Tuple[List[Tuple[Any, ...]], ...],
+        data: Tuple[Sequence[Tuple[Any, ...]], ...],
         literal_binds: bool,
     ):
         super().__init__()
@@ -3327,6 +3426,12 @@ class ScalarValues(roles.InElementRole, GroupedElement, ColumnElement[Any]):
 
     def __clause_element__(self) -> ScalarValues:
         return self
+
+    if TYPE_CHECKING:
+
+        def self_group(
+            self, against: Optional[OperatorType] = None
+        ) -> Self: ...
 
 
 class SelectBase(
@@ -3573,8 +3678,6 @@ class SelectBase(
         The return value is the :class:`_expression.Lateral` construct also
         provided by the top-level :func:`_expression.lateral` function.
 
-        .. versionadded:: 1.1
-
         .. seealso::
 
             :ref:`tutorial_lateral_correlation` -  overview of usage.
@@ -3593,7 +3696,9 @@ class SelectBase(
 
             stmt = select(table.c.id, table.c.name)
 
-        The above statement might look like::
+        The above statement might look like:
+
+        .. sourcecode:: sql
 
             SELECT table.id, table.name FROM table
 
@@ -3604,7 +3709,9 @@ class SelectBase(
             subq = stmt.subquery()
             new_stmt = select(subq)
 
-        The above renders as::
+        The above renders as:
+
+        .. sourcecode:: sql
 
             SELECT anon_1.id, anon_1.name
             FROM (SELECT table.id, table.name FROM table) AS anon_1
@@ -3669,7 +3776,7 @@ class SelectStatementGrouping(GroupedElement, SelectBase, Generic[_SB]):
     __visit_name__ = "select_statement_grouping"
     _traverse_internals: _TraverseInternalsType = [
         ("element", InternalTraversal.dp_clauseelement)
-    ]
+    ] + SupportsCloneAnnotations._clone_annotations_traverse_internals
 
     _is_select_container = True
 
@@ -3702,13 +3809,11 @@ class SelectStatementGrouping(GroupedElement, SelectBase, Generic[_SB]):
         return self.element
 
     def self_group(self, against: Optional[OperatorType] = None) -> Self:
-        ...
         return self
 
     if TYPE_CHECKING:
 
-        def _ungroup(self) -> _SB:
-            ...
+        def _ungroup(self) -> _SB: ...
 
     # def _generate_columns_plus_names(
     #    self, anon_for_dupe_key: bool
@@ -3750,6 +3855,10 @@ class SelectStatementGrouping(GroupedElement, SelectBase, Generic[_SB]):
     @util.ro_non_memoized_property
     def _from_objects(self) -> List[FromClause]:
         return self.element._from_objects
+
+    def add_cte(self, *ctes: CTE, nest_here: bool = False) -> Self:
+        # SelectStatementGrouping not generative: has no attribute '_generate'
+        raise NotImplementedError
 
 
 class GenerativeSelect(SelectBase, Generative):
@@ -3796,13 +3905,17 @@ class GenerativeSelect(SelectBase, Generative):
 
             stmt = select(table).with_for_update(nowait=True)
 
-        On a database like PostgreSQL or Oracle, the above would render a
-        statement like::
+        On a database like PostgreSQL or Oracle Database, the above would
+        render a statement like:
+
+        .. sourcecode:: sql
 
             SELECT table.a, table.b FROM table FOR UPDATE NOWAIT
 
         on other backends, the ``nowait`` option is ignored and instead
-        would produce::
+        would produce:
+
+        .. sourcecode:: sql
 
             SELECT table.a, table.b FROM table FOR UPDATE
 
@@ -3812,7 +3925,7 @@ class GenerativeSelect(SelectBase, Generative):
         variants.
 
         :param nowait: boolean; will render ``FOR UPDATE NOWAIT`` on Oracle
-         and PostgreSQL dialects.
+         Database and PostgreSQL dialects.
 
         :param read: boolean; will render ``LOCK IN SHARE MODE`` on MySQL,
          ``FOR SHARE`` on PostgreSQL.  On PostgreSQL, when combined with
@@ -3821,13 +3934,13 @@ class GenerativeSelect(SelectBase, Generative):
         :param of: SQL expression or list of SQL expression elements,
          (typically :class:`_schema.Column` objects or a compatible expression,
          for some backends may also be a table expression) which will render
-         into a ``FOR UPDATE OF`` clause; supported by PostgreSQL, Oracle, some
-         MySQL versions and possibly others. May render as a table or as a
-         column depending on backend.
+         into a ``FOR UPDATE OF`` clause; supported by PostgreSQL, Oracle
+         Database, some MySQL versions and possibly others. May render as a
+         table or as a column depending on backend.
 
-        :param skip_locked: boolean, will render ``FOR UPDATE SKIP LOCKED``
-         on Oracle and PostgreSQL dialects or ``FOR SHARE SKIP LOCKED`` if
-         ``read=True`` is also specified.
+        :param skip_locked: boolean, will render ``FOR UPDATE SKIP LOCKED`` on
+         Oracle Database and PostgreSQL dialects or ``FOR SHARE SKIP LOCKED``
+         if ``read=True`` is also specified.
 
         :param key_share: boolean, will render ``FOR NO KEY UPDATE``,
          or if combined with ``read=True`` will render ``FOR KEY SHARE``,
@@ -3859,7 +3972,7 @@ class GenerativeSelect(SelectBase, Generative):
         :attr:`_sql.SelectLabelStyle.LABEL_STYLE_DISAMBIGUATE_ONLY`,
         :attr:`_sql.SelectLabelStyle.LABEL_STYLE_TABLENAME_PLUS_COL`, and
         :attr:`_sql.SelectLabelStyle.LABEL_STYLE_NONE`.   The default style is
-        :attr:`_sql.SelectLabelStyle.LABEL_STYLE_TABLENAME_PLUS_COL`.
+        :attr:`_sql.SelectLabelStyle.LABEL_STYLE_DISAMBIGUATE_ONLY`.
 
         In modern SQLAlchemy, there is not generally a need to change the
         labeling style, as per-expression labels are more effectively used by
@@ -3928,14 +4041,12 @@ class GenerativeSelect(SelectBase, Generative):
     @overload
     def _offset_or_limit_clause_asint(
         self, clause: ColumnElement[Any], attrname: str
-    ) -> NoReturn:
-        ...
+    ) -> NoReturn: ...
 
     @overload
     def _offset_or_limit_clause_asint(
         self, clause: Optional[_OffsetLimitParam], attrname: str
-    ) -> Optional[int]:
-        ...
+    ) -> Optional[int]: ...
 
     def _offset_or_limit_clause_asint(
         self, clause: Optional[ColumnElement[Any]], attrname: str
@@ -4010,9 +4121,6 @@ class GenerativeSelect(SelectBase, Generative):
            The :meth:`_sql.GenerativeSelect.limit` method will replace
            any clause applied with :meth:`_sql.GenerativeSelect.fetch`.
 
-        .. versionchanged:: 1.0.0 - :meth:`_expression.Select.limit` can now
-           accept arbitrary SQL expressions as well as integer values.
-
         :param limit: an integer LIMIT parameter, or a SQL expression
          that provides an integer result. Pass ``None`` to reset it.
 
@@ -4038,10 +4146,10 @@ class GenerativeSelect(SelectBase, Generative):
         """Return a new selectable with the given FETCH FIRST criterion
         applied.
 
-        This is a numeric value which usually renders as
-        ``FETCH {FIRST | NEXT} [ count ] {ROW | ROWS} {ONLY | WITH TIES}``
-        expression in the resulting select. This functionality is
-        is currently implemented for Oracle, PostgreSQL, MSSQL.
+        This is a numeric value which usually renders as ``FETCH {FIRST | NEXT}
+        [ count ] {ROW | ROWS} {ONLY | WITH TIES}`` expression in the resulting
+        select. This functionality is is currently implemented for Oracle
+        Database, PostgreSQL, MSSQL.
 
         Use :meth:`_sql.GenerativeSelect.offset` to specify the offset.
 
@@ -4095,10 +4203,6 @@ class GenerativeSelect(SelectBase, Generative):
         support ``OFFSET`` will attempt to provide similar
         functionality.
 
-
-        .. versionchanged:: 1.0.0 - :meth:`_expression.Select.offset` can now
-           accept arbitrary SQL expressions as well as integer values.
-
         :param offset: an integer OFFSET parameter, or a SQL expression
          that provides an integer result. Pass ``None`` to reset it.
 
@@ -4129,7 +4233,7 @@ class GenerativeSelect(SelectBase, Generative):
 
         For example, ::
 
-            stmt = select(User).order_by(User).id.slice(1, 3)
+            stmt = select(User).order_by(User.id).slice(1, 3)
 
         renders as
 
@@ -4205,7 +4309,9 @@ class GenerativeSelect(SelectBase, Generative):
             self._order_by_clauses = ()
         elif __first is not _NoArg.NO_ARG:
             self._order_by_clauses += tuple(
-                coercions.expect(roles.OrderByRole, clause)
+                coercions.expect(
+                    roles.OrderByRole, clause, apply_propagate_attrs=self
+                )
                 for clause in (__first,) + clauses
             )
         return self
@@ -4226,8 +4332,7 @@ class GenerativeSelect(SelectBase, Generative):
 
         e.g.::
 
-            stmt = select(table.c.name, func.max(table.c.stat)).\
-            group_by(table.c.name)
+            stmt = select(table.c.name, func.max(table.c.stat)).group_by(table.c.name)
 
         :param \*clauses: a series of :class:`_expression.ColumnElement`
          constructs
@@ -4240,13 +4345,15 @@ class GenerativeSelect(SelectBase, Generative):
 
             :ref:`tutorial_order_by_label` - in the :ref:`unified_tutorial`
 
-        """
+        """  # noqa: E501
 
         if not clauses and __first is None:
             self._group_by_clauses = ()
         elif __first is not _NoArg.NO_ARG:
             self._group_by_clauses += tuple(
-                coercions.expect(roles.GroupByRole, clause)
+                coercions.expect(
+                    roles.GroupByRole, clause, apply_propagate_attrs=self
+                )
                 for clause in (__first,) + clauses
             )
         return self
@@ -4301,17 +4408,21 @@ class CompoundSelect(HasCompileState, GenerativeSelect, ExecutableReturnsRows):
 
     __visit_name__ = "compound_select"
 
-    _traverse_internals: _TraverseInternalsType = [
-        ("selects", InternalTraversal.dp_clauseelement_list),
-        ("_limit_clause", InternalTraversal.dp_clauseelement),
-        ("_offset_clause", InternalTraversal.dp_clauseelement),
-        ("_fetch_clause", InternalTraversal.dp_clauseelement),
-        ("_fetch_clause_options", InternalTraversal.dp_plain_dict),
-        ("_order_by_clauses", InternalTraversal.dp_clauseelement_list),
-        ("_group_by_clauses", InternalTraversal.dp_clauseelement_list),
-        ("_for_update_arg", InternalTraversal.dp_clauseelement),
-        ("keyword", InternalTraversal.dp_string),
-    ] + SupportsCloneAnnotations._clone_annotations_traverse_internals
+    _traverse_internals: _TraverseInternalsType = (
+        [
+            ("selects", InternalTraversal.dp_clauseelement_list),
+            ("_limit_clause", InternalTraversal.dp_clauseelement),
+            ("_offset_clause", InternalTraversal.dp_clauseelement),
+            ("_fetch_clause", InternalTraversal.dp_clauseelement),
+            ("_fetch_clause_options", InternalTraversal.dp_plain_dict),
+            ("_order_by_clauses", InternalTraversal.dp_clauseelement_list),
+            ("_group_by_clauses", InternalTraversal.dp_clauseelement_list),
+            ("_for_update_arg", InternalTraversal.dp_clauseelement),
+            ("keyword", InternalTraversal.dp_string),
+        ]
+        + SupportsCloneAnnotations._clone_annotations_traverse_internals
+        + HasCTE._has_ctes_traverse_internals
+    )
 
     selects: List[SelectBase]
 
@@ -4325,9 +4436,9 @@ class CompoundSelect(HasCompileState, GenerativeSelect, ExecutableReturnsRows):
     ):
         self.keyword = keyword
         self.selects = [
-            coercions.expect(roles.CompoundElementRole, s).self_group(
-                against=self
-            )
+            coercions.expect(
+                roles.CompoundElementRole, s, apply_propagate_attrs=self
+            ).self_group(against=self)
             for s in selects
         ]
 
@@ -4407,7 +4518,6 @@ class CompoundSelect(HasCompileState, GenerativeSelect, ExecutableReturnsRows):
             Iterable[Sequence[ColumnElement[Any]]]
         ] = None,
     ) -> None:
-
         # this is a slightly hacky thing - the union exports a
         # column that resembles just that of the *first* selectable.
         # to get at a "composite" column, particularly foreign keys,
@@ -4504,8 +4614,9 @@ class SelectState(util.MemoizedSlots, CompileState):
     if TYPE_CHECKING:
 
         @classmethod
-        def get_plugin_class(cls, statement: Executable) -> Type[SelectState]:
-            ...
+        def get_plugin_class(
+            cls, statement: Executable
+        ) -> Type[SelectState]: ...
 
     def __init__(
         self,
@@ -4570,8 +4681,8 @@ class SelectState(util.MemoizedSlots, CompileState):
     def _column_naming_convention(
         cls, label_style: SelectLabelStyle
     ) -> _LabelConventionCallable:
-
         table_qualified = label_style is LABEL_STYLE_TABLENAME_PLUS_COL
+
         dedupe = label_style is not LABEL_STYLE_NONE
 
         pa = prefix_anon_map()
@@ -4657,7 +4768,6 @@ class SelectState(util.MemoizedSlots, CompileState):
         froms: List[FromClause] = []
 
         for item in iterable_of_froms:
-
             if is_subquery(item) and item.element is check_statement:
                 raise exc.InvalidRequestError(
                     "select() construct refers to itself as a FROM"
@@ -4727,7 +4837,6 @@ class SelectState(util.MemoizedSlots, CompileState):
                 ]
 
         if self.statement._correlate_except is not None:
-
             froms = [
                 f
                 for f in froms
@@ -4745,7 +4854,6 @@ class SelectState(util.MemoizedSlots, CompileState):
             and implicit_correlate_froms
             and len(froms) > 1
         ):
-
             froms = [
                 f
                 for f in froms
@@ -4773,7 +4881,7 @@ class SelectState(util.MemoizedSlots, CompileState):
         Dict[str, ColumnElement[Any]],
     ]:
         with_cols: Dict[str, ColumnElement[Any]] = {
-            c._tq_label or c.key: c  # type: ignore
+            c._tq_label or c.key: c
             for c in self.statement._all_selected_columns
             if c._allow_label_resolve
         }
@@ -4806,7 +4914,7 @@ class SelectState(util.MemoizedSlots, CompileState):
         args: Tuple[_SetupJoinsElement, ...],
         raw_columns: List[_ColumnsClauseElement],
     ) -> None:
-        for (right, onclause, left, flags) in args:
+        for right, onclause, left, flags in args:
             if TYPE_CHECKING:
                 if onclause is not None:
                     assert isinstance(onclause, ColumnElement)
@@ -4881,7 +4989,6 @@ class SelectState(util.MemoizedSlots, CompileState):
         from_clauses = self.from_clauses
 
         if from_clauses:
-
             indexes: List[int] = sql_util.find_left_clause_to_join_from(
                 from_clauses, right, onclause
             )
@@ -4904,7 +5011,6 @@ class SelectState(util.MemoizedSlots, CompileState):
                     ]
                 ),
             ):
-
                 potential[from_clause] = ()
 
             all_clauses = list(potential.keys())
@@ -5043,7 +5149,7 @@ class _MemoizedSelectEntities(
         c.__dict__ = {k: v for k, v in self.__dict__.items()}
 
         c._is_clone_of = self.__dict__.get("_is_clone_of", self)
-        return c  # type: ignore
+        return c
 
     @classmethod
     def _generate_for_statement(cls, select_stmt: Select[Any]) -> None:
@@ -5202,21 +5308,17 @@ class Select(
         @overload
         def scalar_subquery(
             self: Select[Tuple[_MAYBE_ENTITY]],
-        ) -> ScalarSelect[Any]:
-            ...
+        ) -> ScalarSelect[Any]: ...
 
         @overload
         def scalar_subquery(
             self: Select[Tuple[_NOT_ENTITY]],
-        ) -> ScalarSelect[_NOT_ENTITY]:
-            ...
+        ) -> ScalarSelect[_NOT_ENTITY]: ...
 
         @overload
-        def scalar_subquery(self) -> ScalarSelect[Any]:
-            ...
+        def scalar_subquery(self) -> ScalarSelect[Any]: ...
 
-        def scalar_subquery(self) -> ScalarSelect[Any]:
-            ...
+        def scalar_subquery(self) -> ScalarSelect[Any]: ...
 
     def filter_by(self, **kwargs: Any) -> Self:
         r"""apply the given filtering criterion as a WHERE clause
@@ -5316,11 +5418,17 @@ class Select(
 
         E.g.::
 
-            stmt = select(user_table).join(address_table, user_table.c.id == address_table.c.user_id)
+            stmt = select(user_table).join(
+                address_table, user_table.c.id == address_table.c.user_id
+            )
 
-        The above statement generates SQL similar to::
+        The above statement generates SQL similar to:
 
-            SELECT user.id, user.name FROM user JOIN address ON user.id = address.user_id
+        .. sourcecode:: sql
+
+            SELECT user.id, user.name
+            FROM user
+            JOIN address ON user.id = address.user_id
 
         .. versionchanged:: 1.4 :meth:`_expression.Select.join` now creates
            a :class:`_sql.Join` object between a :class:`_sql.FromClause`
@@ -5424,7 +5532,9 @@ class Select(
                 user_table, address_table, user_table.c.id == address_table.c.user_id
             )
 
-        The above statement generates SQL similar to::
+        The above statement generates SQL similar to:
+
+        .. sourcecode:: sql
 
             SELECT user.id, user.name, address.id, address.email, address.user_id
             FROM user JOIN address ON user.id = address.user_id
@@ -5789,26 +5899,34 @@ class Select(
         )
         return woc
 
-    # START OVERLOADED FUNCTIONS self.with_only_columns Select 8
+    # START OVERLOADED FUNCTIONS self.with_only_columns Select 1-8 ", *, maintain_column_froms: bool =..." # noqa: E501
 
     # code within this block is **programmatically,
-    # statically generated** by tools/generate_sel_v1_overloads.py
-
-    @overload
-    def with_only_columns(self, __ent0: _TCCA[_T0]) -> Select[Tuple[_T0]]:
-        ...
+    # statically generated** by tools/generate_tuple_map_overloads.py
 
     @overload
     def with_only_columns(
-        self, __ent0: _TCCA[_T0], __ent1: _TCCA[_T1]
-    ) -> Select[Tuple[_T0, _T1]]:
-        ...
+        self, __ent0: _TCCA[_T0], *, maintain_column_froms: bool = ...
+    ) -> Select[Tuple[_T0]]: ...
 
     @overload
     def with_only_columns(
-        self, __ent0: _TCCA[_T0], __ent1: _TCCA[_T1], __ent2: _TCCA[_T2]
-    ) -> Select[Tuple[_T0, _T1, _T2]]:
-        ...
+        self,
+        __ent0: _TCCA[_T0],
+        __ent1: _TCCA[_T1],
+        *,
+        maintain_column_froms: bool = ...,
+    ) -> Select[Tuple[_T0, _T1]]: ...
+
+    @overload
+    def with_only_columns(
+        self,
+        __ent0: _TCCA[_T0],
+        __ent1: _TCCA[_T1],
+        __ent2: _TCCA[_T2],
+        *,
+        maintain_column_froms: bool = ...,
+    ) -> Select[Tuple[_T0, _T1, _T2]]: ...
 
     @overload
     def with_only_columns(
@@ -5817,8 +5935,9 @@ class Select(
         __ent1: _TCCA[_T1],
         __ent2: _TCCA[_T2],
         __ent3: _TCCA[_T3],
-    ) -> Select[Tuple[_T0, _T1, _T2, _T3]]:
-        ...
+        *,
+        maintain_column_froms: bool = ...,
+    ) -> Select[Tuple[_T0, _T1, _T2, _T3]]: ...
 
     @overload
     def with_only_columns(
@@ -5828,8 +5947,9 @@ class Select(
         __ent2: _TCCA[_T2],
         __ent3: _TCCA[_T3],
         __ent4: _TCCA[_T4],
-    ) -> Select[Tuple[_T0, _T1, _T2, _T3, _T4]]:
-        ...
+        *,
+        maintain_column_froms: bool = ...,
+    ) -> Select[Tuple[_T0, _T1, _T2, _T3, _T4]]: ...
 
     @overload
     def with_only_columns(
@@ -5840,8 +5960,9 @@ class Select(
         __ent3: _TCCA[_T3],
         __ent4: _TCCA[_T4],
         __ent5: _TCCA[_T5],
-    ) -> Select[Tuple[_T0, _T1, _T2, _T3, _T4, _T5]]:
-        ...
+        *,
+        maintain_column_froms: bool = ...,
+    ) -> Select[Tuple[_T0, _T1, _T2, _T3, _T4, _T5]]: ...
 
     @overload
     def with_only_columns(
@@ -5853,8 +5974,9 @@ class Select(
         __ent4: _TCCA[_T4],
         __ent5: _TCCA[_T5],
         __ent6: _TCCA[_T6],
-    ) -> Select[Tuple[_T0, _T1, _T2, _T3, _T4, _T5, _T6]]:
-        ...
+        *,
+        maintain_column_froms: bool = ...,
+    ) -> Select[Tuple[_T0, _T1, _T2, _T3, _T4, _T5, _T6]]: ...
 
     @overload
     def with_only_columns(
@@ -5867,8 +5989,9 @@ class Select(
         __ent5: _TCCA[_T5],
         __ent6: _TCCA[_T6],
         __ent7: _TCCA[_T7],
-    ) -> Select[Tuple[_T0, _T1, _T2, _T3, _T4, _T5, _T6, _T7]]:
-        ...
+        *,
+        maintain_column_froms: bool = ...,
+    ) -> Select[Tuple[_T0, _T1, _T2, _T3, _T4, _T5, _T6, _T7]]: ...
 
     # END OVERLOADED FUNCTIONS self.with_only_columns
 
@@ -5878,8 +6001,7 @@ class Select(
         *entities: _ColumnsClauseArgument[Any],
         maintain_column_froms: bool = False,
         **__kw: Any,
-    ) -> Select[Any]:
-        ...
+    ) -> Select[Any]: ...
 
     @_generative
     def with_only_columns(
@@ -5992,7 +6114,7 @@ class Select(
 
         for criterion in whereclause:
             where_criteria: ColumnElement[Any] = coercions.expect(
-                roles.WhereHavingRole, criterion
+                roles.WhereHavingRole, criterion, apply_propagate_attrs=self
             )
             self._where_criteria += (where_criteria,)
         return self
@@ -6007,7 +6129,7 @@ class Select(
 
         for criterion in having:
             having_criteria = coercions.expect(
-                roles.WhereHavingRole, criterion
+                roles.WhereHavingRole, criterion, apply_propagate_attrs=self
             )
             self._having_criteria += (having_criteria,)
         return self
@@ -6015,11 +6137,29 @@ class Select(
     @_generative
     def distinct(self, *expr: _ColumnExpressionArgument[Any]) -> Self:
         r"""Return a new :func:`_expression.select` construct which
-        will apply DISTINCT to its columns clause.
+        will apply DISTINCT to the SELECT statement overall.
+
+        E.g.::
+
+            from sqlalchemy import select
+
+            stmt = select(users_table.c.id, users_table.c.name).distinct()
+
+        The above would produce an statement resembling:
+
+        .. sourcecode:: sql
+
+            SELECT DISTINCT user.id, user.name FROM user
+
+        The method also accepts an ``*expr`` parameter which produces the
+        PostgreSQL dialect-specific ``DISTINCT ON`` expression.  Using this
+        parameter on other backends which don't support this syntax will
+        raise an error.
 
         :param \*expr: optional column expressions.  When present,
-         the PostgreSQL dialect will render a ``DISTINCT ON (<expressions>>)``
-         construct.
+         the PostgreSQL dialect will render a ``DISTINCT ON (<expressions>)``
+         construct.  A deprecation warning and/or :class:`_exc.CompileError`
+         will be raised on other backends.
 
          .. deprecated:: 1.4 Using \*expr in other dialects is deprecated
             and will raise :class:`_exc.CompileError` in a future version.
@@ -6028,7 +6168,8 @@ class Select(
         if expr:
             self._distinct = True
             self._distinct_on = self._distinct_on + tuple(
-                coercions.expect(roles.ByOfRole, e) for e in expr
+                coercions.expect(roles.ByOfRole, e, apply_propagate_attrs=self)
+                for e in expr
             )
         else:
             self._distinct = True
@@ -6042,12 +6183,11 @@ class Select(
 
         E.g.::
 
-            table1 = table('t1', column('a'))
-            table2 = table('t2', column('b'))
-            s = select(table1.c.a).\
-                select_from(
-                    table1.join(table2, table1.c.a==table2.c.b)
-                )
+            table1 = table("t1", column("a"))
+            table2 = table("t2", column("b"))
+            s = select(table1.c.a).select_from(
+                table1.join(table2, table1.c.a == table2.c.b)
+            )
 
         The "from" list is a unique set on the identity of each element,
         so adding an already present :class:`_schema.Table`
@@ -6066,7 +6206,7 @@ class Select(
         if desired, in the case that the FROM clause cannot be fully
         derived from the columns clause::
 
-            select(func.count('*')).select_from(table1)
+            select(func.count("*")).select_from(table1)
 
         """
 
@@ -6219,8 +6359,8 @@ class Select(
         :class:`_expression.ColumnElement` objects are directly present as they
         were given, e.g.::
 
-            col1 = column('q', Integer)
-            col2 = column('p', Integer)
+            col1 = column("q", Integer)
+            col2 = column("p", Integer)
             stmt = select(col1, col2)
 
         Above, ``stmt.selected_columns`` would be a collection that contains
@@ -6229,6 +6369,19 @@ class Select(
         :class:`_expression.FromClause`, the collection will use the
         :class:`_expression.ColumnElement` objects that are in the
         :attr:`_expression.FromClause.c` collection of the from element.
+
+        A use case for the :attr:`_sql.Select.selected_columns` collection is
+        to allow the existing columns to be referenced when adding additional
+        criteria, e.g.::
+
+            def filter_on_id(my_select, id):
+                return my_select.where(my_select.selected_columns["id"] == id)
+
+
+            stmt = select(MyModel)
+
+            # adds "WHERE id=:param" to the statement
+            stmt = filter_on_id(stmt, 42)
 
         .. note::
 
@@ -6311,7 +6464,6 @@ class Select(
                 if is_column_element(c)
             ]
         else:
-
             prox = [
                 c._make_proxy(
                     subquery,
@@ -6339,7 +6491,6 @@ class Select(
     def self_group(
         self, against: Optional[OperatorType] = None
     ) -> Union[SelectStatementGrouping[Self], Self]:
-        ...
         """Return a 'grouping' construct as per the
         :class:`_expression.ClauseElement` specification.
 
@@ -6500,6 +6651,7 @@ class ScalarSelect(
     def __init__(self, element: SelectBase) -> None:
         self.element = element
         self.type = element._scalar_type()
+        self._propagate_attrs = element._propagate_attrs
 
     def __getattr__(self, attr: str) -> Any:
         return getattr(self.element, attr)
@@ -6530,28 +6682,12 @@ class ScalarSelect(
         self.element = cast("Select[Any]", self.element).where(crit)
         return self
 
-    @overload
-    def self_group(
-        self: ScalarSelect[Any], against: Optional[OperatorType] = None
-    ) -> ScalarSelect[Any]:
-        ...
-
-    @overload
-    def self_group(
-        self: ColumnElement[Any], against: Optional[OperatorType] = None
-    ) -> ColumnElement[Any]:
-        ...
-
-    def self_group(
-        self, against: Optional[OperatorType] = None
-    ) -> ColumnElement[Any]:
-
+    def self_group(self, against: Optional[OperatorType] = None) -> Self:
         return self
 
     if TYPE_CHECKING:
 
-        def _ungroup(self) -> Select[Any]:
-            ...
+        def _ungroup(self) -> Select[Any]: ...
 
     @_generative
     def correlate(
@@ -6682,14 +6818,16 @@ class Exists(UnaryExpression[bool]):
         assert isinstance(return_value, SelectStatementGrouping)
         return return_value
 
-    def select(self) -> Select[Any]:
+    def select(self) -> Select[Tuple[bool]]:
         r"""Return a SELECT of this :class:`_expression.Exists`.
 
         e.g.::
 
             stmt = exists(some_table.c.id).where(some_table.c.id == 5).select()
 
-        This will produce a statement resembling::
+        This will produce a statement resembling:
+
+        .. sourcecode:: sql
 
             SELECT EXISTS (SELECT id FROM some_table WHERE some_table = :param) AS anon_1
 
@@ -6739,7 +6877,7 @@ class Exists(UnaryExpression[bool]):
         )
         return e
 
-    def select_from(self, *froms: FromClause) -> Self:
+    def select_from(self, *froms: _FromClauseArgument) -> Self:
         """Return a new :class:`_expression.Exists` construct,
         applying the given
         expression to the :meth:`_expression.Select.select_from`
@@ -6805,10 +6943,14 @@ class TextualSelect(SelectBase, ExecutableReturnsRows, Generative):
 
     _label_style = LABEL_STYLE_NONE
 
-    _traverse_internals: _TraverseInternalsType = [
-        ("element", InternalTraversal.dp_clauseelement),
-        ("column_args", InternalTraversal.dp_clauseelement_list),
-    ] + SupportsCloneAnnotations._clone_annotations_traverse_internals
+    _traverse_internals: _TraverseInternalsType = (
+        [
+            ("element", InternalTraversal.dp_clauseelement),
+            ("column_args", InternalTraversal.dp_clauseelement_list),
+        ]
+        + SupportsCloneAnnotations._clone_annotations_traverse_internals
+        + HasCTE._has_ctes_traverse_internals
+    )
 
     _is_textual = True
 
@@ -6821,7 +6963,6 @@ class TextualSelect(SelectBase, ExecutableReturnsRows, Generative):
         columns: List[_ColumnExpressionArgument[Any]],
         positional: bool = False,
     ) -> None:
-
         self._init(
             text,
             # convert for ORM attributes->columns, etc

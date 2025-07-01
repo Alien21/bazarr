@@ -1,9 +1,4 @@
-import api from "@/apis/raw";
-import { Selector } from "@/components";
-import MutateButton from "@/components/async/MutateButton";
-import { useModals, withModal } from "@/modules/modals";
-import { BuildKey, useSelectorOptions } from "@/utilities";
-import FormUtils from "@/utilities/form";
+import { FunctionComponent, useCallback, useMemo } from "react";
 import {
   Button,
   Divider,
@@ -13,12 +8,20 @@ import {
   Textarea,
 } from "@mantine/core";
 import { useForm } from "@mantine/form";
+import { useMutation } from "@tanstack/react-query";
 import { isObject } from "lodash";
-import { FunctionComponent, useCallback, useMemo } from "react";
-import { useMutation } from "react-query";
-import { Card } from "../components";
-import { notificationsKey } from "../keys";
-import { useSettingValue, useUpdateArray } from "../utilities/hooks";
+import api from "@/apis/raw";
+import { Selector } from "@/components";
+import MutateButton from "@/components/async/MutateButton";
+import { useModals, withModal } from "@/modules/modals";
+import { Card } from "@/pages/Settings/components";
+import { notificationsKey } from "@/pages/Settings/keys";
+import {
+  useSettingValue,
+  useUpdateArray,
+} from "@/pages/Settings/utilities/hooks";
+import { BuildKey, useSelectorOptions } from "@/utilities";
+import FormUtils from "@/utilities/form";
 
 const notificationHook = (notifications: Settings.NotificationInfo[]) => {
   return notifications.map((info) => JSON.stringify(info));
@@ -37,7 +40,7 @@ const NotificationForm: FunctionComponent<Props> = ({
 }) => {
   const availableSelections = useMemo(
     () => selections.filter((v) => !v.enabled || v.name === payload?.name),
-    [payload?.name, selections]
+    [payload?.name, selections],
   );
   const options = useSelectorOptions(availableSelections, (v) => v.name);
 
@@ -51,16 +54,18 @@ const NotificationForm: FunctionComponent<Props> = ({
     validate: {
       selection: FormUtils.validation(
         isObject,
-        "Please select a notification provider"
+        "Please select a notification provider",
       ),
       url: FormUtils.validation(
-        (value) => value.trim().length !== 0,
-        "URL must not be empty"
+        (value: string) => value.trim().length !== 0,
+        "URL must not be empty",
       ),
     },
   });
 
-  const test = useMutation((url: string) => api.system.testNotification(url));
+  const test = useMutation({
+    mutationFn: (url: string) => api.system.testNotification(url),
+  });
 
   return (
     <form
@@ -90,7 +95,7 @@ const NotificationForm: FunctionComponent<Props> = ({
           ></Textarea>
         </div>
         <Divider></Divider>
-        <Group position="right">
+        <Group justify="right">
           <MutateButton mutation={test} args={() => form.values.url}>
             Test
           </MutateButton>
@@ -123,20 +128,20 @@ export const NotificationView: FunctionComponent = () => {
     {
       onLoaded: (settings) => settings.notifications.providers,
       onSubmit: (value) => value.map((v) => JSON.stringify(v)),
-    }
+    },
   );
 
   const update = useUpdateArray<Settings.NotificationInfo>(
     notificationsKey,
     notifications ?? [],
-    "name"
+    "name",
   );
 
   const updateWrapper = useCallback(
     (info: Settings.NotificationInfo) => {
       update(info, notificationHook);
     },
-    [update]
+    [update],
   );
 
   const modals = useModals();

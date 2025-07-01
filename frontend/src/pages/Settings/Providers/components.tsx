@@ -1,51 +1,72 @@
-import { Selector } from "@/components";
-import { useModals, withModal } from "@/modules/modals";
-import { BuildKey, useSelectorOptions } from "@/utilities";
-import { ASSERT } from "@/utilities/console";
 import {
-  Button,
-  Divider,
-  Group,
-  Text as MantineText,
-  SimpleGrid,
-  Stack,
-} from "@mantine/core";
-import { useForm } from "@mantine/form";
-import { capitalize } from "lodash";
-import {
+  Fragment,
   FunctionComponent,
-  forwardRef,
+  JSX,
   useCallback,
   useMemo,
   useRef,
   useState,
 } from "react";
 import {
+  AutocompleteProps,
+  Button,
+  Divider,
+  Group,
+  SimpleGrid,
+  Stack,
+  Text as MantineText,
+} from "@mantine/core";
+import { useForm } from "@mantine/form";
+import { capitalize } from "lodash";
+import { Selector } from "@/components";
+import { useModals, withModal } from "@/modules/modals";
+import {
   Card,
   Check,
   Chips,
-  Selector as GlobalSelector,
   Message,
   Password,
+  ProviderTestButton,
+  Selector as GlobalSelector,
   Text,
-} from "../components";
+} from "@/pages/Settings/components";
 import {
   FormContext,
   FormValues,
   runHooks,
   useFormActions,
   useStagedValues,
-} from "../utilities/FormValues";
-import { SettingsProvider, useSettings } from "../utilities/SettingsProvider";
-import { useSettingValue } from "../utilities/hooks";
+} from "@/pages/Settings/utilities/FormValues";
+import { useSettingValue } from "@/pages/Settings/utilities/hooks";
+import {
+  SettingsProvider,
+  useSettings,
+} from "@/pages/Settings/utilities/SettingsProvider";
+import { BuildKey, useSelectorOptions } from "@/utilities";
+import { ASSERT } from "@/utilities/console";
 import { ProviderInfo, ProviderList } from "./list";
 
-const ProviderKey = "settings-general-enabled_providers";
+type SettingsKey =
+  | "settings-general-enabled_providers"
+  | "settings-general-enabled_integrations";
 
-export const ProviderView: FunctionComponent = () => {
+interface ProviderViewProps {
+  availableOptions: Readonly<ProviderInfo[]>;
+  settingsKey: SettingsKey;
+}
+
+interface ProviderSelect {
+  value: string;
+  payload: ProviderInfo;
+}
+
+export const ProviderView: FunctionComponent<ProviderViewProps> = ({
+  availableOptions,
+  settingsKey,
+}) => {
   const settings = useSettings();
   const staged = useStagedValues();
-  const providers = useSettingValue<string[]>(ProviderKey);
+  const providers = useSettingValue<string[]>(settingsKey);
 
   const { update } = useFormActions();
 
@@ -60,17 +81,27 @@ export const ProviderView: FunctionComponent = () => {
           staged,
           settings,
           onChange: update,
+          availableOptions: availableOptions,
+          settingsKey: settingsKey,
         });
       }
     },
-    [modals, providers, settings, staged, update]
+    [
+      modals,
+      providers,
+      settings,
+      staged,
+      update,
+      availableOptions,
+      settingsKey,
+    ],
   );
 
   const cards = useMemo(() => {
     if (providers) {
       return providers
         .flatMap((v) => {
-          const item = ProviderList.find((inn) => inn.key === v);
+          const item = availableOptions.find((inn) => inn.key === v);
           if (item) {
             return item;
           } else {
@@ -79,16 +110,18 @@ export const ProviderView: FunctionComponent = () => {
         })
         .map((v, idx) => (
           <Card
+            titleStyles={{ overflow: "hidden", textOverflow: "ellipsis" }}
             key={BuildKey(v.key, idx)}
             header={v.name ?? capitalize(v.key)}
             description={v.description}
             onClick={() => select(v)}
+            lineClamp={2}
           ></Card>
         ));
     } else {
       return [];
     }
-  }, [providers, select]);
+  }, [providers, select, availableOptions]);
 
   return (
     <SimpleGrid cols={3}>
@@ -105,19 +138,41 @@ interface ProviderToolProps {
   staged: LooseObject;
   settings: Settings;
   onChange: (v: LooseObject) => void;
+  availableOptions: Readonly<ProviderInfo[]>;
+  settingsKey: Readonly<SettingsKey>;
 }
 
-const SelectItem = forwardRef<
-  HTMLDivElement,
-  { payload: ProviderInfo; label: string }
->(({ payload: { description }, label, ...other }, ref) => {
+const SelectItem: AutocompleteProps["renderOption"] = ({ option }) => {
+  const provider = option as ProviderSelect;
+
   return (
-    <Stack spacing={1} ref={ref} {...other}>
-      <MantineText size="md">{label}</MantineText>
-      <MantineText size="xs">{description}</MantineText>
+    <Stack gap={1}>
+      <MantineText size="md">{provider.value}</MantineText>
+      <MantineText size="xs">{provider.payload.description}</MantineText>
     </Stack>
   );
-});
+};
+
+const validation = ProviderList.map((provider) => {
+  return provider.inputs
+    ?.map((input) => {
+      if (input.validation === undefined) {
+        return null;
+      }
+
+      return {
+        [`settings-${provider.key}-${input.key}`]: input.validation?.rule,
+      };
+    })
+    .filter((input) => input && Object.keys(input).length > 0)
+    .reduce((acc, curr) => {
+      return { ...acc, ...curr };
+    }, {});
+})
+  .filter((provider) => provider && Object.keys(provider).length > 0)
+  .reduce((acc, item) => {
+    return { ...acc, ...item };
+  }, {});
 
 const ProviderTool: FunctionComponent<ProviderToolProps> = ({
   payload,
@@ -125,6 +180,8 @@ const ProviderTool: FunctionComponent<ProviderToolProps> = ({
   staged,
   settings,
   onChange,
+  availableOptions,
+  settingsKey,
 }) => {
   const modals = useModals();
 
@@ -138,6 +195,9 @@ const ProviderTool: FunctionComponent<ProviderToolProps> = ({
       settings: staged,
       hooks: {},
     },
+    validate: {
+      settings: validation!,
+    },
   });
 
   const deletePayload = useCallback(() => {
@@ -146,22 +206,27 @@ const ProviderTool: FunctionComponent<ProviderToolProps> = ({
       if (idx !== -1) {
         const newProviders = [...enabledProviders];
         newProviders.splice(idx, 1);
-        onChangeRef.current({ [ProviderKey]: newProviders });
+        onChangeRef.current({ [settingsKey]: newProviders });
         modals.closeAll();
       }
     }
-  }, [payload, enabledProviders, modals]);
+  }, [payload, enabledProviders, modals, settingsKey]);
 
   const submit = useCallback(
     (values: FormValues) => {
+      const result = form.validate();
+
+      if (result.hasErrors) {
+        return;
+      }
+
       if (info && enabledProviders) {
         const changes = { ...values.settings };
         const hooks = values.hooks;
 
         // Add this provider if not exist
         if (enabledProviders.find((v) => v === info.key) === undefined) {
-          const newProviders = [...enabledProviders, info.key];
-          changes[ProviderKey] = newProviders;
+          changes[settingsKey] = [...enabledProviders, info.key];
         }
 
         // Apply submit hooks
@@ -171,7 +236,7 @@ const ProviderTool: FunctionComponent<ProviderToolProps> = ({
         modals.closeAll();
       }
     },
-    [info, enabledProviders, modals]
+    [info, enabledProviders, modals, settingsKey, form],
   );
 
   const canSave = info !== null;
@@ -187,19 +252,19 @@ const ProviderTool: FunctionComponent<ProviderToolProps> = ({
     }
   }, []);
 
-  const availableOptions = useMemo(
+  const options = useMemo(
     () =>
-      ProviderList.filter(
+      availableOptions.filter(
         (v) =>
           enabledProviders?.find((p) => p === v.key && p !== info?.key) ===
-          undefined
+          undefined,
       ),
-    [info?.key, enabledProviders]
+    [info?.key, enabledProviders, availableOptions],
   );
 
-  const options = useSelectorOptions(
-    availableOptions,
-    (v) => v.name ?? capitalize(v.key)
+  const selectorOptions = useSelectorOptions(
+    options,
+    (v) => v.name ?? capitalize(v.key),
   );
 
   const inputs = useMemo(() => {
@@ -216,52 +281,73 @@ const ProviderTool: FunctionComponent<ProviderToolProps> = ({
       const label = value.name ?? capitalize(value.key);
       const options = value.options ?? [];
 
+      const error = form.errors[`settings.settings-${itemKey}-${key}`] ? (
+        <MantineText c="red" component="span" size="xs">
+          {form.errors[`settings.settings-${itemKey}-${key}`]}
+        </MantineText>
+      ) : null;
+
       switch (value.type) {
         case "text":
           elements.push(
-            <Text
-              key={BuildKey(itemKey, key)}
-              label={label}
-              settingKey={`settings-${itemKey}-${key}`}
-            ></Text>
+            <Fragment key={BuildKey(itemKey, key)}>
+              <Text
+                label={label}
+                settingKey={`settings-${itemKey}-${key}`}
+              ></Text>
+              {error}
+            </Fragment>,
           );
           return;
         case "password":
           elements.push(
-            <Password
-              key={BuildKey(itemKey, key)}
-              label={label}
-              settingKey={`settings-${itemKey}-${key}`}
-            ></Password>
+            <Fragment key={BuildKey(itemKey, key)}>
+              <Password
+                label={label}
+                settingKey={`settings-${itemKey}-${key}`}
+              ></Password>
+              {error}
+            </Fragment>,
           );
           return;
         case "switch":
           elements.push(
-            <Check
-              key={key}
-              inline
-              label={label}
-              settingKey={`settings-${itemKey}-${key}`}
-            ></Check>
+            <Fragment key={BuildKey(itemKey, key)}>
+              <Check
+                inline
+                label={label}
+                settingKey={`settings-${itemKey}-${key}`}
+              ></Check>
+              {error}
+            </Fragment>,
           );
           return;
         case "select":
           elements.push(
-            <GlobalSelector
-              key={key}
-              label={label}
-              settingKey={`settings-${itemKey}-${key}`}
-              options={options}
-            ></GlobalSelector>
+            <Fragment key={BuildKey(itemKey, key)}>
+              <GlobalSelector
+                label={label}
+                settingKey={`settings-${itemKey}-${key}`}
+                options={options}
+              ></GlobalSelector>
+              {error}
+            </Fragment>,
+          );
+          return;
+        case "testbutton":
+          elements.push(
+            <ProviderTestButton category={key}></ProviderTestButton>,
           );
           return;
         case "chips":
           elements.push(
-            <Chips
-              key={key}
-              label={label}
-              settingKey={`settings-${itemKey}-${key}`}
-            ></Chips>
+            <Fragment key={BuildKey(itemKey, key)}>
+              <Chips
+                label={label}
+                settingKey={`settings-${itemKey}-${key}`}
+              ></Chips>
+              {error}
+            </Fragment>,
           );
           return;
         default:
@@ -269,20 +355,21 @@ const ProviderTool: FunctionComponent<ProviderToolProps> = ({
       }
     });
 
-    return <Stack spacing="xs">{elements}</Stack>;
-  }, [info]);
+    return <Stack gap="xs">{elements}</Stack>;
+  }, [info, form]);
 
   return (
     <SettingsProvider value={settings}>
       <FormContext.Provider value={form}>
         <Stack>
-          <Stack spacing="xs">
+          <Stack gap="xs">
             <Selector
+              data-autofocus
               searchable
               placeholder="Click to Select a Provider"
-              itemComponent={SelectItem}
+              renderOption={SelectItem}
               disabled={payload !== null}
-              {...options}
+              {...selectorOptions}
               value={info}
               onChange={onSelect}
             ></Selector>
@@ -293,9 +380,9 @@ const ProviderTool: FunctionComponent<ProviderToolProps> = ({
             </div>
           </Stack>
           <Divider></Divider>
-          <Group position="right">
+          <Group justify="right">
             <Button hidden={!payload} color="red" onClick={deletePayload}>
-              Delete
+              Disable
             </Button>
             <Button
               disabled={!canSave}
@@ -303,7 +390,7 @@ const ProviderTool: FunctionComponent<ProviderToolProps> = ({
                 submit(form.values);
               }}
             >
-              Save
+              Enable
             </Button>
           </Group>
         </Stack>

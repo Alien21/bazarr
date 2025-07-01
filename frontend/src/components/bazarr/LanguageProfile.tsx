@@ -1,5 +1,5 @@
-import { useLanguageProfiles } from "@/apis/hooks";
 import { FunctionComponent, useMemo } from "react";
+import { useLanguageProfiles } from "@/apis/hooks";
 
 interface Props {
   index: number | null;
@@ -14,7 +14,7 @@ const LanguageProfileName: FunctionComponent<Props> = ({
 
   const name = useMemo(
     () => data?.find((v) => v.profileId === index)?.name ?? empty,
-    [data, empty, index]
+    [data, empty, index],
   );
 
   return <>{name}</>;

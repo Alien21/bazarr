@@ -5,21 +5,62 @@ This is a module for making text less broken. See the `fix_text` function
 for more information.
 """
 
+from __future__ import annotations
+
 import unicodedata
 import warnings
-from typing import List, NamedTuple, Optional, Tuple, Union, no_type_check
+from typing import (
+    Any,
+    BinaryIO,
+    Callable,
+    Dict,
+    Iterator,
+    List,
+    Literal,
+    NamedTuple,
+    Optional,
+    TextIO,
+    Tuple,
+    Union,
+    cast,
+)
 
-from ftfy import bad_codecs
-from ftfy import chardata, fixes
+from ftfy import bad_codecs, chardata, fixes
 from ftfy.badness import is_bad
 from ftfy.formatting import display_ljust
 
-__version__ = "6.1.1"
+__version__ = "6.2.3"
 
 
 # Though this function does nothing, it lets linters know that we're using
 # ftfy.bad_codecs. See the docstring in `bad_codecs/__init__.py` for more.
 bad_codecs.ok()
+
+
+class ExplanationStep(NamedTuple):
+    """
+    A step in an ExplainedText, explaining how to decode text.
+
+    The possible actions are:
+
+    - "encode": take in a string and encode it as bytes, with the given encoding
+    - "decode": take in bytes and decode them as a string, with the given encoding
+    - "transcode": convert bytes to bytes with a particular named function
+    - "apply": convert str to str with a particular named function
+
+    The `parameter` is the name of the encoding or function to use. If it's a
+    function, it must appear in the FIXERS dictionary.
+    """
+
+    action: str
+    parameter: str
+
+    def __repr__(self) -> str:
+        """
+        Get the string representation of an ExplanationStep. We output the
+        representation of the equivalent tuple, for simplicity.
+        """
+        return repr(tuple(self))
 
 
 class ExplainedText(NamedTuple):
@@ -32,7 +73,24 @@ class ExplainedText(NamedTuple):
     """
 
     text: str
-    explanation: Optional[List[Tuple[str, str]]]
+    explanation: Optional[List[ExplanationStep]]
+
+
+# Functions that can be applied using `apply_plan`.
+FIXERS: Dict[str, Callable] = {  # type: ignore[type-arg]
+    "unescape_html": fixes.unescape_html,
+    "remove_terminal_escapes": fixes.remove_terminal_escapes,
+    "restore_byte_a0": fixes.restore_byte_a0,
+    "replace_lossy_sequences": fixes.replace_lossy_sequences,
+    "decode_inconsistent_utf8": fixes.decode_inconsistent_utf8,
+    "fix_c1_controls": fixes.fix_c1_controls,
+    "fix_latin_ligatures": fixes.fix_latin_ligatures,
+    "fix_character_width": fixes.fix_character_width,
+    "uncurl_quotes": fixes.uncurl_quotes,
+    "fix_line_breaks": fixes.fix_line_breaks,
+    "fix_surrogates": fixes.fix_surrogates,
+    "remove_control_chars": fixes.remove_control_chars,
+}
 
 
 class TextFixerConfig(NamedTuple):
@@ -155,6 +213,7 @@ class TextFixerConfig(NamedTuple):
       Functions that accept TextFixerConfig and don't return an explanation
       will automatically set `explain` to False.
     """
+
     unescape_html: Union[str, bool] = "auto"
     remove_terminal_escapes: bool = True
     fix_encoding: bool = True
@@ -168,41 +227,29 @@ class TextFixerConfig(NamedTuple):
     fix_line_breaks: bool = True
     fix_surrogates: bool = True
     remove_control_chars: bool = True
-    normalization: Optional[str] = "NFC"
+    normalization: Optional[Literal["NFC", "NFD", "NFKC", "NFKD"]] = "NFC"
     max_decode_length: int = 1000000
     explain: bool = True
 
 
-def _config_from_kwargs(config: TextFixerConfig, kwargs: dict) -> TextFixerConfig:
+def _config_from_kwargs(
+    config: TextFixerConfig, kwargs: Dict[str, Any]
+) -> TextFixerConfig:
     """
     Handle parameters provided as keyword arguments to ftfy's top-level
     functions, converting them into a TextFixerConfig.
     """
     if "fix_entities" in kwargs:
         warnings.warn(
-            "`fix_entities` has been renamed to `unescape_html`", DeprecationWarning
+            "`fix_entities` has been renamed to `unescape_html`",
+            DeprecationWarning,
+            stacklevel=2,
         )
         kwargs = kwargs.copy()
         kwargs["unescape_html"] = kwargs["fix_entities"]
         del kwargs["fix_entities"]
     config = config._replace(**kwargs)
     return config
-
-
-FIXERS = {
-    "unescape_html": fixes.unescape_html,
-    "remove_terminal_escapes": fixes.remove_terminal_escapes,
-    "restore_byte_a0": fixes.restore_byte_a0,
-    "replace_lossy_sequences": fixes.replace_lossy_sequences,
-    "decode_inconsistent_utf8": fixes.decode_inconsistent_utf8,
-    "fix_c1_controls": fixes.fix_c1_controls,
-    "fix_latin_ligatures": fixes.fix_latin_ligatures,
-    "fix_character_width": fixes.fix_character_width,
-    "uncurl_quotes": fixes.uncurl_quotes,
-    "fix_line_breaks": fixes.fix_line_breaks,
-    "fix_surrogates": fixes.fix_surrogates,
-    "remove_control_chars": fixes.remove_control_chars,
-}
 
 
 BYTES_ERROR_TEXT = """Hey wait, this isn't Unicode.
@@ -226,7 +273,10 @@ Python Unicode HOWTO:
 
 
 def _try_fix(
-    fixer_name: str, text: str, config: TextFixerConfig, steps: Optional[list]
+    fixer_name: str,
+    text: str,
+    config: TextFixerConfig,
+    steps: Optional[List[ExplanationStep]],
 ) -> str:
     """
     A helper function used across several 'fixer' steps, deciding whether to
@@ -236,13 +286,13 @@ def _try_fix(
         fixer = FIXERS[fixer_name]
         fixed = fixer(text)
         if steps is not None and fixed != text:
-            steps.append(("apply", fixer_name))
-        return fixed
+            steps.append(ExplanationStep("apply", fixer_name))
+        return cast(str, fixed)
 
     return text
 
 
-def fix_text(text: str, config: Optional[TextFixerConfig] = None, **kwargs) -> str:
+def fix_text(text: str, config: Optional[TextFixerConfig] = None, **kwargs: Any) -> str:
     r"""
     Given Unicode text as input, fix inconsistencies and glitches in it,
     such as mojibake (text that was decoded in the wrong encoding).
@@ -317,7 +367,7 @@ def fix_text(text: str, config: Optional[TextFixerConfig] = None, **kwargs) -> s
 
 
 def fix_and_explain(
-    text: str, config: Optional[TextFixerConfig] = None, **kwargs
+    text: str, config: Optional[TextFixerConfig] = None, **kwargs: Any
 ) -> ExplainedText:
     """
     Fix text as a single segment, returning the fixed text and an explanation
@@ -336,7 +386,7 @@ def fix_and_explain(
         config = config._replace(unescape_html=False)
 
     if config.explain:
-        steps: Optional[List[Tuple[str, str]]] = []
+        steps: Optional[List[ExplanationStep]] = []
     else:
         # If explanations aren't desired, `steps` will be None
         steps = None
@@ -369,7 +419,7 @@ def fix_and_explain(
         if config.normalization is not None:
             fixed = unicodedata.normalize(config.normalization, text)
             if steps is not None and fixed != text:
-                steps.append(("normalize", config.normalization))
+                steps.append(ExplanationStep("normalize", config.normalization))
             text = fixed
 
         if text == origtext:
@@ -377,7 +427,7 @@ def fix_and_explain(
 
 
 def fix_encoding_and_explain(
-    text: str, config: Optional[TextFixerConfig] = None, **kwargs
+    text: str, config: Optional[TextFixerConfig] = None, **kwargs: Any
 ) -> ExplainedText:
     """
     Apply the steps of ftfy that detect mojibake and fix it. Returns the fixed
@@ -410,7 +460,7 @@ def fix_encoding_and_explain(
         # fixing the encoding
         return ExplainedText(text, [])
 
-    plan_so_far: List[Tuple[str, str]] = []
+    plan_so_far: List[ExplanationStep] = []
     while True:
         prevtext = text
         text, plan = _fix_encoding_one_step_and_explain(text, config)
@@ -449,7 +499,7 @@ def _fix_encoding_one_step_and_explain(
         if chardata.possible_encoding(text, encoding):
             possible_1byte_encodings.append(encoding)
             encoded_bytes = text.encode(encoding)
-            encode_step = ("encode", encoding)
+            encode_step = ExplanationStep("encode", encoding)
             transcode_steps = []
 
             # Now, find out if it's UTF-8 (or close enough). Otherwise,
@@ -458,25 +508,34 @@ def _fix_encoding_one_step_and_explain(
                 decoding = "utf-8"
                 # Check encoded_bytes for sequences that would be UTF-8,
                 # except they have b' ' where b'\xa0' would belong.
-                if config.restore_byte_a0 and chardata.ALTERED_UTF8_RE.search(
-                    encoded_bytes
+                #
+                # Don't do this in the macroman encoding, where it would match
+                # an en dash followed by a space, leading to false positives.
+                if (
+                    config.restore_byte_a0
+                    and encoding != "macroman"
+                    and chardata.ALTERED_UTF8_RE.search(encoded_bytes)
                 ):
                     replaced_bytes = fixes.restore_byte_a0(encoded_bytes)
                     if replaced_bytes != encoded_bytes:
-                        transcode_steps.append(("transcode", "restore_byte_a0"))
+                        transcode_steps.append(
+                            ExplanationStep("transcode", "restore_byte_a0")
+                        )
                         encoded_bytes = replaced_bytes
 
                 # Replace sequences where information has been lost
                 if config.replace_lossy_sequences and encoding.startswith("sloppy"):
                     replaced_bytes = fixes.replace_lossy_sequences(encoded_bytes)
                     if replaced_bytes != encoded_bytes:
-                        transcode_steps.append(("transcode", "replace_lossy_sequences"))
+                        transcode_steps.append(
+                            ExplanationStep("transcode", "replace_lossy_sequences")
+                        )
                         encoded_bytes = replaced_bytes
 
                 if 0xED in encoded_bytes or 0xC0 in encoded_bytes:
                     decoding = "utf-8-variants"
 
-                decode_step = ("decode", decoding)
+                decode_step = ExplanationStep("decode", decoding)
                 steps = [encode_step] + transcode_steps + [decode_step]
                 fixed = encoded_bytes.decode(decoding)
                 return ExplainedText(fixed, steps)
@@ -486,7 +545,7 @@ def _fix_encoding_one_step_and_explain(
 
     # Look for a-hat-euro sequences that remain, and fix them in isolation.
     if config.decode_inconsistent_utf8 and chardata.UTF8_DETECTOR_RE.search(text):
-        steps = [("apply", "decode_inconsistent_utf8")]
+        steps = [ExplanationStep("apply", "decode_inconsistent_utf8")]
         fixed = fixes.decode_inconsistent_utf8(text)
         if fixed != text:
             return ExplainedText(fixed, steps)
@@ -506,14 +565,17 @@ def _fix_encoding_one_step_and_explain(
             try:
                 fixed = text.encode("latin-1").decode("windows-1252")
                 if fixed != text:
-                    steps = [("encode", "latin-1"), ("decode", "windows-1252")]
+                    steps = [
+                        ExplanationStep("encode", "latin-1"),
+                        ExplanationStep("decode", "windows-1252"),
+                    ]
                     return ExplainedText(fixed, steps)
             except UnicodeDecodeError:
                 pass
 
     # Fix individual characters of Latin-1 with a less satisfying explanation
     if config.fix_c1_controls and chardata.C1_CONTROL_RE.search(text):
-        steps = [("transcode", "fix_c1_controls")]
+        steps = [ExplanationStep("transcode", "fix_c1_controls")]
         fixed = fixes.fix_c1_controls(text)
         return ExplainedText(fixed, steps)
 
@@ -526,7 +588,9 @@ def _fix_encoding_one_step_and_explain(
     return ExplainedText(text, [])
 
 
-def fix_encoding(text: str, config: TextFixerConfig = None, **kwargs):
+def fix_encoding(
+    text: str, config: Optional[TextFixerConfig] = None, **kwargs: Any
+) -> str:
     """
     Apply just the encoding-fixing steps of ftfy to this text. Returns the
     fixed text, discarding the explanation.
@@ -547,7 +611,9 @@ def fix_encoding(text: str, config: TextFixerConfig = None, **kwargs):
 ftfy = fix_text
 
 
-def fix_text_segment(text: str, config: TextFixerConfig = None, **kwargs):
+def fix_text_segment(
+    text: str, config: Optional[TextFixerConfig] = None, **kwargs: Any
+) -> str:
     """
     Fix text as a single segment, with a consistent sequence of steps that
     are applied to fix the text. Discard the explanation.
@@ -559,7 +625,12 @@ def fix_text_segment(text: str, config: TextFixerConfig = None, **kwargs):
     return fixed
 
 
-def fix_file(input_file, encoding=None, config=None, **kwargs):
+def fix_file(
+    input_file: TextIO | BinaryIO,
+    encoding: Optional[str] = None,
+    config: Optional[TextFixerConfig] = None,
+    **kwargs: Any,
+) -> Iterator[str]:
     """
     Fix text that is found in a file.
 
@@ -587,7 +658,7 @@ def fix_file(input_file, encoding=None, config=None, **kwargs):
         yield fixed_line
 
 
-def guess_bytes(bstring):
+def guess_bytes(bstring: bytes) -> Tuple[str, str]:
     """
     NOTE: Using `guess_bytes` is not the recommended way of using ftfy. ftfy
     is not designed to be an encoding detector.
@@ -658,8 +729,7 @@ def guess_bytes(bstring):
     return bstring.decode("sloppy-windows-1252"), "sloppy-windows-1252"
 
 
-@no_type_check
-def apply_plan(text: str, plan: List[Tuple[str, str]]):
+def apply_plan(text: str, plan: List[Tuple[str, str]]) -> str:
     """
     Apply a plan for fixing the encoding of text.
 
@@ -686,9 +756,9 @@ def apply_plan(text: str, plan: List[Tuple[str, str]]):
     obj = text
     for operation, encoding in plan:
         if operation == "encode":
-            obj = obj.encode(encoding)
+            obj = obj.encode(encoding)  # type: ignore
         elif operation == "decode":
-            obj = obj.decode(encoding)
+            obj = obj.decode(encoding)  # type: ignore
         elif operation in ("transcode", "apply"):
             if encoding in FIXERS:
                 obj = FIXERS[encoding](obj)
@@ -700,7 +770,7 @@ def apply_plan(text: str, plan: List[Tuple[str, str]]):
     return obj
 
 
-def explain_unicode(text: str):
+def explain_unicode(text: str) -> None:
     """
     A utility method that's useful for debugging mysterious Unicode.
 

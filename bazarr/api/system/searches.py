@@ -3,10 +3,12 @@
 from flask_restx import Resource, Namespace, reqparse
 from unidecode import unidecode
 
-from app.config import settings
+from app.config import base_url, settings
 from app.database import TableShows, TableMovies, database, select
 
 from ..utils import authenticate
+
+import textdistance 
 
 api_ns_system_searches = Namespace('System Searches', description='Search for series or movies by name')
 
@@ -32,6 +34,7 @@ class Searches(Resource):
                 search_list += database.execute(
                     select(TableShows.title,
                            TableShows.sonarrSeriesId,
+                           TableShows.poster,
                            TableShows.year)
                     .order_by(TableShows.title)) \
                     .all()
@@ -41,6 +44,7 @@ class Searches(Resource):
                 search_list += database.execute(
                     select(TableMovies.title,
                            TableMovies.radarrId,
+                           TableMovies.poster,
                            TableMovies.year)
                     .order_by(TableMovies.title)) \
                     .all()
@@ -56,9 +60,14 @@ class Searches(Resource):
 
                 if hasattr(x, 'sonarrSeriesId'):
                     result['sonarrSeriesId'] = x.sonarrSeriesId
+                    result['poster'] = f"{base_url}/images/series{x.poster}" if x.poster else None
+
                 else:
                     result['radarrId'] = x.radarrId
+                    result['poster'] = f"{base_url}/images/movies{x.poster}" if x.poster else None
 
                 results.append(result)
 
+        # sort results by how closely they match the query
+        results = sorted(results, key=lambda x: textdistance.hamming.distance(query, x['title']))
         return results

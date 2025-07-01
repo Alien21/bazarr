@@ -1,23 +1,24 @@
-import { LOG } from "@/utilities/console";
+import { useCallback, useMemo, useRef } from "react";
 import {
+  ComboboxItem,
+  ComboboxItemGroup,
   MultiSelect,
   MultiSelectProps,
   Select,
-  SelectItem,
   SelectProps,
 } from "@mantine/core";
 import { isNull, isUndefined } from "lodash";
-import { useCallback, useMemo, useRef } from "react";
+import { LOG } from "@/utilities/console";
 
 export type SelectorOption<T> = Override<
   {
     value: T;
     label: string;
   },
-  SelectItem
+  ComboboxItem
 >;
 
-type SelectItemWithPayload<T> = SelectItem & {
+type SelectItemWithPayload<T> = ComboboxItem & {
   payload: T;
 };
 
@@ -29,9 +30,36 @@ function DefaultKeyBuilder<T>(value: T) {
   } else {
     LOG("error", "Unknown value type", value);
     throw new Error(
-      `Invalid type (${typeof value}) in the SelectorOption, please provide a label builder`
+      `Invalid type (${typeof value}) in the SelectorOption, please provide a label builder`,
     );
   }
+}
+
+export interface GroupedSelectorOptions<T> {
+  group: string;
+  items: SelectorOption<T>[];
+}
+
+export type GroupedSelectorProps<T> = Override<
+  {
+    options: ComboboxItemGroup[];
+    getkey?: (value: T) => string;
+  },
+  Omit<SelectProps, "data">
+>;
+
+export function GroupedSelector<T>({
+  options,
+  ...select
+}: GroupedSelectorProps<T>) {
+  return (
+    <Select
+      data-testid="input-selector"
+      comboboxProps={{ withinPortal: true }}
+      data={options}
+      {...select}
+    ></Select>
+  );
 }
 
 export type SelectorProps<T> = Override<
@@ -64,7 +92,7 @@ export function Selector<T>({
         payload: value,
         ...option,
       })),
-    [keyRef, options]
+    [keyRef, options],
   );
 
   const wrappedValue = useMemo(() => {
@@ -84,16 +112,17 @@ export function Selector<T>({
   }, [defaultValue, keyRef]);
 
   const wrappedOnChange = useCallback(
-    (value: string) => {
+    (value: string | null) => {
       const payload = data.find((v) => v.value === value)?.payload ?? null;
       onChange?.(payload);
     },
-    [data, onChange]
+    [data, onChange],
   );
 
   return (
     <Select
-      withinPortal={true}
+      data-testid="input-selector"
+      comboboxProps={{ withinPortal: true }}
       data={data}
       defaultValue={wrappedDefaultValue}
       value={wrappedValue}
@@ -137,16 +166,17 @@ export function MultiSelector<T>({
         payload: value,
         ...option,
       })),
-    [options]
+    [options],
   );
 
   const wrappedValue = useMemo(
     () => value && value.map(labelRef.current),
-    [value]
+    [value],
   );
+
   const wrappedDefaultValue = useMemo(
     () => defaultValue && defaultValue.map(labelRef.current),
-    [defaultValue]
+    [defaultValue],
   );
 
   const wrappedOnChange = useCallback(
@@ -162,12 +192,13 @@ export function MultiSelector<T>({
       }
       onChange?.(payloads);
     },
-    [data, onChange]
+    [data, onChange],
   );
 
   return (
     <MultiSelect
       {...select}
+      hidePickedOptions
       value={wrappedValue}
       defaultValue={wrappedDefaultValue}
       onChange={wrappedOnChange}

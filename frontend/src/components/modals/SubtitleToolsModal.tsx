@@ -1,24 +1,59 @@
+import { FunctionComponent, useMemo, useState } from "react";
+import {
+  Badge,
+  Button,
+  Checkbox,
+  Divider,
+  Group,
+  Stack,
+  Text,
+} from "@mantine/core";
+import { ColumnDef } from "@tanstack/react-table";
+import {
+  useEpisodeSubtitleModification,
+  useMovieSubtitleModification,
+} from "@/apis/hooks";
 import Language from "@/components/bazarr/Language";
 import SubtitleToolsMenu from "@/components/SubtitleToolsMenu";
-import { SimpleTable } from "@/components/tables";
-import { useCustomSelection } from "@/components/tables/plugins";
-import { withModal } from "@/modules/modals";
-import { isMovie } from "@/utilities";
-import { Badge, Button, Divider, Group, Stack, Text } from "@mantine/core";
-import { FunctionComponent, useMemo, useState } from "react";
-import { Column, useRowSelect } from "react-table";
+import SimpleTable from "@/components/tables/SimpleTable";
+import { useModals, withModal } from "@/modules/modals";
+import { task, TaskGroup } from "@/modules/task";
+import { fromPython, isMovie, toPython } from "@/utilities";
 
 type SupportType = Item.Episode | Item.Movie;
 
 type TableColumnType = FormType.ModifySubtitle & {
   raw_language: Language.Info;
+  seriesId: number;
+  name: string;
+  isMovie: boolean;
 };
 
-function getIdAndType(item: SupportType): [number, "episode" | "movie"] {
+type LocalisedType = {
+  id: number;
+  seriesId: number;
+  type: "movie" | "episode";
+  name: string;
+  isMovie: boolean;
+};
+
+function getLocalisedValues(item: SupportType): LocalisedType {
   if (isMovie(item)) {
-    return [item.radarrId, "movie"];
+    return {
+      seriesId: 0,
+      id: item.radarrId,
+      type: "movie",
+      name: item.title,
+      isMovie: true,
+    };
   } else {
-    return [item.sonarrEpisodeId, "episode"];
+    return {
+      seriesId: item.sonarrSeriesId,
+      id: item.sonarrEpisodeId,
+      type: "episode",
+      name: item.title,
+      isMovie: false,
+    };
   }
 }
 
@@ -34,25 +69,59 @@ const SubtitleToolView: FunctionComponent<SubtitleToolViewProps> = ({
   payload,
 }) => {
   const [selections, setSelections] = useState<TableColumnType[]>([]);
+  const { remove: removeEpisode, download: downloadEpisode } =
+    useEpisodeSubtitleModification();
+  const { download: downloadMovie, remove: removeMovie } =
+    useMovieSubtitleModification();
+  const modals = useModals();
 
-  const columns: Column<TableColumnType>[] = useMemo<Column<TableColumnType>[]>(
+  const columns = useMemo<ColumnDef<TableColumnType>[]>(
     () => [
       {
-        Header: "Language",
-        accessor: "raw_language",
-        Cell: ({ value }) => (
+        id: "selection",
+        header: ({ table }) => {
+          return (
+            <Checkbox
+              id="table-header-selection"
+              indeterminate={table.getIsSomeRowsSelected()}
+              checked={table.getIsAllRowsSelected()}
+              onChange={table.getToggleAllRowsSelectedHandler()}
+            ></Checkbox>
+          );
+        },
+        cell: ({ row: { index, getIsSelected, getToggleSelectedHandler } }) => {
+          return (
+            <Checkbox
+              id={`table-cell-${index}`}
+              checked={getIsSelected()}
+              onChange={getToggleSelectedHandler()}
+              onClick={getToggleSelectedHandler()}
+            ></Checkbox>
+          );
+        },
+      },
+      {
+        header: "Language",
+        accessorKey: "raw_language",
+        cell: ({
+          row: {
+            original: { raw_language: rawLanguage },
+          },
+        }) => (
           <Badge color="secondary">
-            <Language.Text value={value} long></Language.Text>
+            <Language.Text value={rawLanguage} long></Language.Text>
           </Badge>
         ),
       },
       {
         id: "file",
-        Header: "File",
-        accessor: "path",
-        Cell: ({ value }) => {
-          const path = value;
-
+        header: "File",
+        accessorKey: "path",
+        cell: ({
+          row: {
+            original: { path },
+          },
+        }) => {
           let idx = path.lastIndexOf("/");
 
           if (idx === -1) {
@@ -67,23 +136,28 @@ const SubtitleToolView: FunctionComponent<SubtitleToolViewProps> = ({
         },
       },
     ],
-    []
+    [],
   );
 
   const data = useMemo<TableColumnType[]>(
     () =>
       payload.flatMap((item) => {
-        const [id, type] = getIdAndType(item);
+        const { seriesId, id, type, name, isMovie } = getLocalisedValues(item);
         return item.subtitles.flatMap((v) => {
           if (v.path) {
             return [
               {
                 id,
+                seriesId,
                 type,
                 language: v.code2,
                 path: v.path,
                 // eslint-disable-next-line camelcase
                 raw_language: v,
+                name,
+                hi: toPython(v.forced),
+                forced: toPython(v.hi),
+                isMovie,
               },
             ];
           } else {
@@ -91,24 +165,67 @@ const SubtitleToolView: FunctionComponent<SubtitleToolViewProps> = ({
           }
         });
       }),
-    [payload]
+    [payload],
   );
-
-  const plugins = [useRowSelect, useCustomSelection];
 
   return (
     <Stack>
       <SimpleTable
         tableStyles={{ emptyText: "No external subtitles found" }}
-        plugins={plugins}
+        enableRowSelection={(row) => CanSelectSubtitle(row.original)}
+        onRowSelectionChanged={(rows) =>
+          setSelections(rows.map((r) => r.original))
+        }
         columns={columns}
-        onSelect={setSelections}
-        canSelect={CanSelectSubtitle}
         data={data}
       ></SimpleTable>
       <Divider></Divider>
       <Group>
-        <SubtitleToolsMenu selections={selections}>
+        <SubtitleToolsMenu
+          selections={selections}
+          onAction={(action) => {
+            selections.forEach((selection) => {
+              const actionPayload = {
+                form: {
+                  language: selection.language,
+                  hi: fromPython(selection.hi),
+                  forced: fromPython(selection.forced),
+                  path: selection.path,
+                },
+                radarrId: 0,
+                seriesId: 0,
+                episodeId: 0,
+              };
+              if (selection.isMovie) {
+                actionPayload.radarrId = selection.id;
+              } else {
+                actionPayload.seriesId = selection.seriesId;
+                actionPayload.episodeId = selection.id;
+              }
+              const download = selection.isMovie
+                ? downloadMovie
+                : downloadEpisode;
+              const remove = selection.isMovie ? removeMovie : removeEpisode;
+
+              if (action === "search") {
+                task.create(
+                  selection.name,
+                  TaskGroup.SearchSubtitle,
+                  download.mutateAsync,
+                  actionPayload,
+                );
+              } else if (action === "delete" && selection.path) {
+                task.create(
+                  selection.name,
+                  TaskGroup.DeleteSubtitle,
+                  remove.mutateAsync,
+                  actionPayload,
+                );
+              }
+            });
+            modals.closeAll();
+          }}
+        >
           <Button disabled={selections.length === 0} variant="light">
             Select Action
           </Button>

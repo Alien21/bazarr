@@ -5,9 +5,11 @@ display such as a terminal.
 We used to have our own implementation here, but now we mostly rely on
 the 'wcwidth' library.
 """
+
 from unicodedata import normalize
 
 from wcwidth import wcswidth, wcwidth
+
 from ftfy.fixes import remove_terminal_escapes
 
 
@@ -29,7 +31,7 @@ def character_width(char: str) -> int:
     >>> character_width('\n')
     -1
     """
-    return wcwidth(char)
+    return int(wcwidth(char))
 
 
 def monospaced_width(text: str) -> int:
@@ -48,7 +50,7 @@ def monospaced_width(text: str) -> int:
     >>> len('ちゃぶ台返し')
     6
     >>> monospaced_width('owl\N{SOFT HYPHEN}flavored')
-    12
+    11
     >>> monospaced_width('example\x80')
     -1
 
@@ -71,10 +73,10 @@ def monospaced_width(text: str) -> int:
     #
     # Remove terminal escapes before calculating width, because if they are
     # displayed as intended, they will have zero width.
-    return wcswidth(remove_terminal_escapes(normalize("NFC", text)))
+    return int(wcswidth(remove_terminal_escapes(normalize("NFC", text))))
 
 
-def display_ljust(text, width, fillchar=" "):
+def display_ljust(text: str, width: int, fillchar: str = " ") -> str:
     """
     Return `text` left-justified in a Unicode string whose display width,
     in a monospaced terminal, should be at least `width` character cells.
@@ -108,7 +110,7 @@ def display_ljust(text, width, fillchar=" "):
     return text + fillchar * padding
 
 
-def display_rjust(text, width, fillchar=" "):
+def display_rjust(text: str, width: int, fillchar: str = " ") -> str:
     """
     Return `text` right-justified in a Unicode string whose display width,
     in a monospaced terminal, should be at least `width` character cells.
@@ -137,7 +139,7 @@ def display_rjust(text, width, fillchar=" "):
     return fillchar * padding + text
 
 
-def display_center(text, width, fillchar=" "):
+def display_center(text: str, width: int, fillchar: str = " ") -> str:
     """
     Return `text` centered in a Unicode string whose display width, in a
     monospaced terminal, should be at least `width` character cells. The rest

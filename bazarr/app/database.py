@@ -136,6 +136,7 @@ class TableEpisodes(Base):
 
     audio_codec = mapped_column(Text)
     audio_language = mapped_column(Text)
+    created_at_timestamp = mapped_column(DateTime)
     episode = mapped_column(Integer, nullable=False)
     episode_file_id = mapped_column(Integer)
     failedAttempts = mapped_column(Text)
@@ -152,6 +153,7 @@ class TableEpisodes(Base):
     sonarrSeriesId = mapped_column(Integer, ForeignKey('table_shows.sonarrSeriesId', ondelete='CASCADE'))
     subtitles = mapped_column(Text)
     title = mapped_column(Text, nullable=False)
+    updated_at_timestamp = mapped_column(DateTime)
     video_codec = mapped_column(Text)
 
 
@@ -172,6 +174,7 @@ class TableHistory(Base):
     video_path = mapped_column(Text)
     matched = mapped_column(Text)
     not_matched = mapped_column(Text)
+    upgradedFromId = mapped_column(Integer, ForeignKey('table_history.id'))
 
 
 class TableHistoryMovie(Base):
@@ -190,6 +193,7 @@ class TableHistoryMovie(Base):
     video_path = mapped_column(Text)
     matched = mapped_column(Text)
     not_matched = mapped_column(Text)
+    upgradedFromId = mapped_column(Integer, ForeignKey('table_history_movie.id'))
 
 
 class TableLanguagesProfiles(Base):
@@ -202,6 +206,7 @@ class TableLanguagesProfiles(Base):
     name = mapped_column(Text, nullable=False)
     mustContain = mapped_column(Text)
     mustNotContain = mapped_column(Text)
+    tag = mapped_column(Text)
 
 
 class TableMovies(Base):
@@ -210,6 +215,7 @@ class TableMovies(Base):
     alternativeTitles = mapped_column(Text)
     audio_codec = mapped_column(Text)
     audio_language = mapped_column(Text)
+    created_at_timestamp = mapped_column(DateTime)
     failedAttempts = mapped_column(Text)
     fanart = mapped_column(Text)
     ffprobe_cache = mapped_column(LargeBinary)
@@ -231,6 +237,7 @@ class TableMovies(Base):
     tags = mapped_column(Text)
     title = mapped_column(Text, nullable=False)
     tmdbId = mapped_column(Text, nullable=False, unique=True)
+    updated_at_timestamp = mapped_column(DateTime)
     video_codec = mapped_column(Text)
     year = mapped_column(Text)
 
@@ -268,8 +275,11 @@ class TableShows(Base):
     tvdbId = mapped_column(Integer)
     alternativeTitles = mapped_column(Text)
     audio_language = mapped_column(Text)
+    created_at_timestamp = mapped_column(DateTime)
+    ended = mapped_column(Text)
     fanart = mapped_column(Text)
     imdbId = mapped_column(Text)
+    lastAired = mapped_column(Text)
     monitored = mapped_column(Text)
     overview = mapped_column(Text)
     path = mapped_column(Text, nullable=False, unique=True)
@@ -280,6 +290,7 @@ class TableShows(Base):
     sortTitle = mapped_column(Text)
     tags = mapped_column(Text)
     title = mapped_column(Text, nullable=False)
+    updated_at_timestamp = mapped_column(DateTime)
     year = mapped_column(Text)
 
 
@@ -376,6 +387,7 @@ def update_profile_id_list():
         'mustContain': ast.literal_eval(x.mustContain) if x.mustContain else [],
         'mustNotContain': ast.literal_eval(x.mustNotContain) if x.mustNotContain else [],
         'originalFormat': x.originalFormat,
+        'tag': x.tag,
     } for x in database.execute(
         select(TableLanguagesProfiles.profileId,
                TableLanguagesProfiles.name,
@@ -383,7 +395,8 @@ def update_profile_id_list():
                TableLanguagesProfiles.items,
                TableLanguagesProfiles.mustContain,
                TableLanguagesProfiles.mustNotContain,
-               TableLanguagesProfiles.originalFormat))
+               TableLanguagesProfiles.originalFormat,
+               TableLanguagesProfiles.tag))
         .all()
     ]
 
@@ -418,7 +431,7 @@ def get_profile_cutoff(profile_id):
     if profile_id and profile_id != 'null':
         cutoff_language = []
         for profile in profile_id_list:
-            profileId, name, cutoff, items, mustContain, mustNotContain, originalFormat = profile.values()
+            profileId, name, cutoff, items, mustContain, mustNotContain, originalFormat, tag = profile.values()
             if cutoff:
                 if profileId == int(profile_id):
                     for item in items:
@@ -497,3 +510,58 @@ def convert_list_to_clause(arr: list):
         return f"({','.join(str(x) for x in arr)})"
     else:
         return ""
+
+
+def upgrade_languages_profile_hi_values():
+    for languages_profile in (database.execute(
+            select(
+                TableLanguagesProfiles.profileId,
+                TableLanguagesProfiles.name,
+                TableLanguagesProfiles.cutoff,
+                TableLanguagesProfiles.items,
+                TableLanguagesProfiles.mustContain,
+                TableLanguagesProfiles.mustNotContain,
+                TableLanguagesProfiles.originalFormat,
+                TableLanguagesProfiles.tag)
+            ))\
+            .all():
+        items = json.loads(languages_profile.items)
+        for language in items:
+            if language['hi'] == "only":
+                language['hi'] = "True"
+            elif language['hi'] in ["also", "never"]:
+                language['hi'] = "False"
+        database.execute(
+            update(TableLanguagesProfiles)
+            .values({"items": json.dumps(items)})
+            .where(TableLanguagesProfiles.profileId == languages_profile.profileId)
+        )
+
+
+def fix_languages_profiles_with_duplicate_ids():
+    languages_profiles = database.execute(
+        select(TableLanguagesProfiles.profileId, TableLanguagesProfiles.items, TableLanguagesProfiles.cutoff)).all()
+    for languages_profile in languages_profiles:
+        if languages_profile.cutoff:
+            # ignore profiles that have a cutoff set
+            continue
+        languages_profile_ids = []
+        languages_profile_has_duplicate = False
+        languages_profile_items = json.loads(languages_profile.items)
+        for items in languages_profile_items:
+            if items['id'] in languages_profile_ids:
+                languages_profile_has_duplicate = True
+                break
+            else:
+                languages_profile_ids.append(items['id'])
+
+        if languages_profile_has_duplicate:
+            item_id = 0
+            for items in languages_profile_items:
+                item_id += 1
+                items['id'] = item_id
+            database.execute(
+                update(TableLanguagesProfiles)
+                .values({"items": json.dumps(languages_profile_items)})
+                .where(TableLanguagesProfiles.profileId == languages_profile.profileId)
+            )

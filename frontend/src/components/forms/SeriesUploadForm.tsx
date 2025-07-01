@@ -1,17 +1,13 @@
+import React, { FunctionComponent, useEffect, useMemo } from "react";
 import {
-  useEpisodesBySeriesId,
-  useEpisodeSubtitleModification,
-  useSubtitleInfos,
-} from "@/apis/hooks";
-import { useModals, withModal } from "@/modules/modals";
-import { task, TaskGroup } from "@/modules/task";
-import { useTableStyles } from "@/styles";
-import { useArrayAction, useSelectorOptions } from "@/utilities";
-import FormUtils from "@/utilities/form";
-import {
-  useLanguageProfileBy,
-  useProfileItemsToLanguages,
-} from "@/utilities/languages";
+  Button,
+  Divider,
+  MantineColor,
+  Select,
+  Stack,
+  Text,
+} from "@mantine/core";
+import { useForm } from "@mantine/form";
 import {
   faCheck,
   faCircleNotch,
@@ -20,21 +16,25 @@ import {
   faTrash,
 } from "@fortawesome/free-solid-svg-icons";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
+import { ColumnDef } from "@tanstack/react-table";
+import { isString, uniqBy } from "lodash";
 import {
-  Button,
-  Checkbox,
-  Divider,
-  MantineColor,
-  Stack,
-  Text,
-} from "@mantine/core";
-import { useForm } from "@mantine/form";
-import { isString } from "lodash";
-import { FunctionComponent, useEffect, useMemo } from "react";
-import { Column } from "react-table";
-import { Action, Selector } from "../inputs";
-import { SimpleTable } from "../tables";
-import TextPopover from "../TextPopover";
+  useEpisodesBySeriesId,
+  useEpisodeSubtitleModification,
+  useSubtitleInfos,
+} from "@/apis/hooks";
+import { subtitlesTypeOptions } from "@/components/forms/uploadFormSelectorTypes";
+import { Action, Selector } from "@/components/inputs";
+import SimpleTable from "@/components/tables/SimpleTable";
+import TextPopover from "@/components/TextPopover";
+import { useModals, withModal } from "@/modules/modals";
+import { task, TaskGroup } from "@/modules/task";
+import { useArrayAction, useSelectorOptions } from "@/utilities";
+import FormUtils from "@/utilities/form";
+import {
+  useLanguageProfileBy,
+  useProfileItemsToLanguages,
+} from "@/utilities/languages";
 
 type SubtitleFile = {
   file: File;
@@ -64,7 +64,7 @@ const validator = (file: SubtitleFile): SubtitleValidateResult => {
   } else {
     const { subtitles } = file.episode;
     const existing = subtitles.find(
-      (v) => v.code2 === file.language?.code2 && isString(v.path)
+      (v) => v.code2 === file.language?.code2 && isString(v.path),
     );
     if (existing !== undefined) {
       return {
@@ -95,20 +95,20 @@ const SeriesUploadForm: FunctionComponent<Props> = ({
   const episodeOptions = useSelectorOptions(
     episodes.data ?? [],
     (v) => `(${v.season}x${v.episode}) ${v.title}`,
-    (v) => v.sonarrEpisodeId.toString()
+    (v) => v.sonarrEpisodeId.toString(),
   );
 
   const profile = useLanguageProfileBy(series.profileId);
   const languages = useProfileItemsToLanguages(profile);
   const languageOptions = useSelectorOptions(
-    languages,
+    uniqBy(languages, "code2"),
     (v) => v.name,
-    (v) => v.code2
+    (v) => v.code2,
   );
 
   const defaultLanguage = useMemo(
     () => (languages.length > 0 ? languages[0] : null),
-    [languages]
+    [languages],
   );
 
   const form = useForm({
@@ -128,15 +128,15 @@ const SeriesUploadForm: FunctionComponent<Props> = ({
     },
     validate: {
       files: FormUtils.validation(
-        (values) =>
+        (values: SubtitleFile[]) =>
           values.find(
-            (v) =>
+            (v: SubtitleFile) =>
               v.language === null ||
               v.episode === null ||
               v.validateResult === undefined ||
-              v.validateResult.state === "error"
+              v.validateResult.state === "error",
           ) === undefined,
-        "Some files cannot be uploaded, please check"
+        "Some files cannot be uploaded, please check",
       ),
     },
   });
@@ -162,7 +162,7 @@ const SeriesUploadForm: FunctionComponent<Props> = ({
         if (info) {
           item.episode =
             episodes.data?.find(
-              (v) => v.season === info.season && v.episode === info.episode
+              (v) => v.season === info.season && v.episode === info.episode,
             ) ?? item.episode;
         }
         return item;
@@ -170,93 +170,74 @@ const SeriesUploadForm: FunctionComponent<Props> = ({
     }
   }, [action, episodes.data, infos.data]);
 
-  const columns = useMemo<Column<SubtitleFile>[]>(
+  const ValidateResultCell = ({
+    validateResult,
+  }: {
+    validateResult: SubtitleValidateResult | undefined;
+  }) => {
+    const icon = useMemo(() => {
+      switch (validateResult?.state) {
+        case "valid":
+          return faCheck;
+        case "warning":
+          return faInfoCircle;
+        case "error":
+          return faTimes;
+        default:
+          return faCircleNotch;
+      }
+    }, [validateResult?.state]);
+
+    const color = useMemo<MantineColor | undefined>(() => {
+      switch (validateResult?.state) {
+        case "valid":
+          return "green";
+        case "warning":
+          return "yellow";
+        case "error":
+          return "red";
+        default:
+          return undefined;
+      }
+    }, [validateResult?.state]);
+
+    return (
+      <TextPopover text={validateResult?.messages}>
+        <Text c={color} inline>
+          <FontAwesomeIcon icon={icon}></FontAwesomeIcon>
+        </Text>
+      </TextPopover>
+    );
+  };
+
+  const columns = useMemo<ColumnDef<SubtitleFile>[]>(
     () => [
       {
-        accessor: "validateResult",
-        Cell: ({ cell: { value } }) => {
-          const icon = useMemo(() => {
-            switch (value?.state) {
-              case "valid":
-                return faCheck;
-              case "warning":
-                return faInfoCircle;
-              case "error":
-                return faTimes;
-              default:
-                return faCircleNotch;
-            }
-          }, [value?.state]);
-
-          const color = useMemo<MantineColor | undefined>(() => {
-            switch (value?.state) {
-              case "valid":
-                return "green";
-              case "warning":
-                return "yellow";
-              case "error":
-                return "red";
-              default:
-                return undefined;
-            }
-          }, [value?.state]);
-
-          return (
-            <TextPopover text={value?.messages}>
-              <Text color={color} inline>
-                <FontAwesomeIcon icon={icon}></FontAwesomeIcon>
-              </Text>
-            </TextPopover>
-          );
+        id: "validateResult",
+        cell: ({
+          row: {
+            original: { validateResult },
+          },
+        }) => {
+          return <ValidateResultCell validateResult={validateResult} />;
         },
       },
       {
-        Header: "File",
+        header: "File",
         id: "filename",
-        accessor: "file",
-        Cell: ({ value: { name } }) => {
-          const { classes } = useTableStyles();
-          return <Text className={classes.primary}>{name}</Text>;
+        accessorKey: "file",
+        cell: ({
+          row: {
+            original: {
+              file: { name },
+            },
+          },
+        }) => {
+          return <Text className="table-primary">{name}</Text>;
         },
       },
       {
-        Header: "Forced",
-        accessor: "forced",
-        Cell: ({ row: { original, index }, value }) => {
-          return (
-            <Checkbox
-              checked={value}
-              onChange={({ currentTarget: { checked } }) => {
-                action.mutate(index, {
-                  ...original,
-                  forced: checked,
-                  hi: checked ? false : original.hi,
-                });
-              }}
-            ></Checkbox>
-          );
-        },
-      },
-      {
-        Header: "HI",
-        accessor: "hi",
-        Cell: ({ row: { original, index }, value }) => {
-          return (
-            <Checkbox
-              checked={value}
-              onChange={({ currentTarget: { checked } }) => {
-                action.mutate(index, {
-                  ...original,
-                  hi: checked,
-                  forced: checked ? false : original.forced,
-                });
-              }}
-            ></Checkbox>
-          );
-        },
-      },
-      {
-        Header: (
+        header: () => (
           <Selector
             {...languageOptions}
             value={null}
@@ -264,21 +245,19 @@ const SeriesUploadForm: FunctionComponent<Props> = ({
             onChange={(value) => {
               if (value) {
                 action.update((item) => {
-                  item.language = value;
-                  return item;
+                  return { ...item, language: value };
                 });
               }
             }}
           ></Selector>
         ),
-        accessor: "language",
-        Cell: ({ row: { original, index }, value }) => {
-          const { classes } = useTableStyles();
+        accessorKey: "language",
+        cell: ({ row: { original, index } }) => {
           return (
             <Selector
               {...languageOptions}
-              className={classes.select}
-              value={value}
+              className="table-select"
+              value={original.language}
               onChange={(item) => {
                 action.mutate(index, { ...original, language: item });
               }}
@@ -287,19 +266,73 @@ const SeriesUploadForm: FunctionComponent<Props> = ({
         },
       },
       {
+        header: () => (
+          <Selector
+            options={subtitlesTypeOptions}
+            value={null}
+            placeholder="Type"
+            onChange={(value) => {
+              if (value) {
+                action.update((item) => {
+                  switch (value) {
+                    case "hi":
+                      return { ...item, hi: true, forced: false };
+                    case "forced":
+                      return { ...item, hi: false, forced: true };
+                    case "normal":
+                      return { ...item, hi: false, forced: false };
+                    default:
+                      return item;
+                  }
+                });
+              }
+            }}
+          ></Selector>
+        ),
+        accessorKey: "type",
+        cell: ({ row: { original, index } }) => {
+          return (
+            <Select
+              value={
+                subtitlesTypeOptions.find((s) => {
+                  if (original.hi) {
+                    return s.value === "hi";
+                  }
+
+                  if (original.forced) {
+                    return s.value === "forced";
+                  }
+
+                  return s.value === "normal";
+                })?.value
+              }
+              data={subtitlesTypeOptions}
+              onChange={(value) => {
+                if (value) {
+                  action.mutate(index, {
+                    ...original,
+                    hi: value === "hi",
+                    forced: value === "forced",
+                  });
+                }
+              }}
+            ></Select>
+          );
+        },
+      },
+      {
         id: "episode",
-        Header: "Episode",
-        accessor: "episode",
-        Cell: ({ value, row }) => {
-          const { classes } = useTableStyles();
+        header: "Episode",
+        accessorKey: "episode",
+        cell: ({ row: { original, index } }) => {
           return (
             <Selector
               {...episodeOptions}
               searchable
-              className={classes.select}
-              value={value}
+              className="table-select"
+              value={original.episode}
               onChange={(item) => {
-                action.mutate(row.index, { ...row.original, episode: item });
+                action.mutate(index, { ...original, episode: item });
               }}
             ></Selector>
           );
@@ -307,20 +340,19 @@ const SeriesUploadForm: FunctionComponent<Props> = ({
       },
       {
         id: "action",
-        accessor: "file",
-        Cell: ({ row: { index } }) => {
+        cell: ({ row: { index } }) => {
           return (
             <Action
               label="Remove"
               icon={faTrash}
-              color="red"
+              c="red"
               onClick={() => action.remove(index)}
             ></Action>
           );
         },
       },
     ],
-    [action, episodeOptions, languageOptions]
+    [action, episodeOptions, languageOptions],
   );
 
   const { upload } = useEpisodeSubtitleModification();
@@ -335,7 +367,7 @@ const SeriesUploadForm: FunctionComponent<Props> = ({
 
           if (language === null || episode === null) {
             throw new Error(
-              "Invalid language or episode. This shouldn't happen, please report this bug."
+              "Invalid language or episode. This shouldn't happen, please report this bug.",
             );
           }
 
@@ -358,7 +390,7 @@ const SeriesUploadForm: FunctionComponent<Props> = ({
         modals.closeSelf();
       })}
     >
-      <Stack>
+      <Stack className="table-long-break">
         <SimpleTable columns={columns} data={form.values.files}></SimpleTable>
         <Divider></Divider>
         <Button type="submit">Upload</Button>
@@ -370,7 +402,7 @@ const SeriesUploadForm: FunctionComponent<Props> = ({
 export const SeriesUploadModal = withModal(
   SeriesUploadForm,
   "upload-series-subtitles",
-  { title: "Upload Subtitles", size: "xl" }
+  { title: "Upload Subtitles", size: "xl" },
 );
 
 export default SeriesUploadForm;

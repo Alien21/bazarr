@@ -1,6 +1,7 @@
-import { useIsLoading } from "@/contexts";
-import { Group, Pagination, Text } from "@mantine/core";
 import { FunctionComponent } from "react";
+import { Group, Pagination, Text } from "@mantine/core";
+import { useIsLoading } from "@/contexts";
+
 interface Props {
   count: number;
   index: number;
@@ -23,7 +24,7 @@ const PageControl: FunctionComponent<Props> = ({
   const isLoading = useIsLoading();
 
   return (
-    <Group p={16} position="apart">
+    <Group p={16} justify="space-between">
       <Text size="sm">
         Show {start} to {end} of {total} entries
       </Text>
@@ -31,7 +32,9 @@ const PageControl: FunctionComponent<Props> = ({
         size="sm"
         color={isLoading ? "gray" : "primary"}
         value={index + 1}
-        onChange={(page) => goto(page - 1)}
+        onChange={(page) => {
+          return goto(page - 1);
+        }}
         hidden={count <= 1}
         total={count}
       ></Pagination>

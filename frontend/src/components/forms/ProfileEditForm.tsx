@@ -1,14 +1,9 @@
-import { Action, Selector, SelectorOption, SimpleTable } from "@/components";
-import { useModals, withModal } from "@/modules/modals";
-import { useTableStyles } from "@/styles";
-import { useArrayAction, useSelectorOptions } from "@/utilities";
-import { LOG } from "@/utilities/console";
-import FormUtils from "@/utilities/form";
-import { faTrash } from "@fortawesome/free-solid-svg-icons";
+import React, { FunctionComponent, useCallback, useMemo } from "react";
 import {
   Accordion,
   Button,
   Checkbox,
+  Flex,
   Select,
   Stack,
   Switch,
@@ -16,9 +11,16 @@ import {
   TextInput,
 } from "@mantine/core";
 import { useForm } from "@mantine/form";
-import { FunctionComponent, useCallback, useMemo } from "react";
-import { Column } from "react-table";
-import ChipInput from "../inputs/ChipInput";
+import { faTrash } from "@fortawesome/free-solid-svg-icons";
+import { ColumnDef } from "@tanstack/react-table";
+import { Action, Selector, SelectorOption } from "@/components";
+import ChipInput from "@/components/inputs/ChipInput";
+import SimpleTable from "@/components/tables/SimpleTable";
+import { useModals, withModal } from "@/modules/modals";
+import { useArrayAction, useSelectorOptions } from "@/utilities";
+import { LOG } from "@/utilities/console";
+import FormUtils from "@/utilities/form";
+import styles from "./ProfileEditForm.module.scss";
 
 export const anyCutoff = 65535;
 
@@ -68,12 +70,19 @@ const ProfileEditForm: FunctionComponent<Props> = ({
     initialValues: profile,
     validate: {
       name: FormUtils.validation(
-        (value) => value.length > 0,
-        "Must have a name"
+        (value: string) => value.length > 0,
+        "Must have a name",
       ),
+      tag: FormUtils.validation((value: string | undefined) => {
+        if (!value) {
+          return true;
+        }
+
+        return /^[a-z_0-9-]+$/.test(value);
+      }, "Only lowercase alphanumeric characters, underscores (_) and hyphens (-) are allowed"),
       items: FormUtils.validation(
-        (value) => value.length > 0,
-        "Must contain at lease 1 language"
+        (value: Language.ProfileItem[]) => value.length > 0,
+        "Must contain at least 1 language",
       ),
     },
   });
@@ -82,8 +91,13 @@ const ProfileEditForm: FunctionComponent<Props> = ({
 
   const itemCutoffOptions = useSelectorOptions(
     form.values.items,
-    (v) => v.language,
-    (v) => String(v.id)
+    (v) => {
+      const suffix =
+        v.hi === "True" ? ":hi" : v.forced === "True" ? ":forced" : "";
+
+      return v.language + suffix;
+    },
+    (v) => String(v.id),
   );
 
   const cutoffOptions = useMemo(
@@ -91,24 +105,24 @@ const ProfileEditForm: FunctionComponent<Props> = ({
       ...itemCutoffOptions,
       options: [...itemCutoffOptions.options, ...defaultCutoffOptions],
     }),
-    [itemCutoffOptions]
+    [itemCutoffOptions],
   );
 
   const selectedCutoff = useMemo(
     () =>
       cutoffOptions.options.find((v) => v.value.id === form.values.cutoff)
         ?.value ?? null,
-    [cutoffOptions, form.values.cutoff]
+    [cutoffOptions, form.values.cutoff],
   );
 
   const mustContainOptions = useSelectorOptions(
     form.values.mustContain,
-    (v) => v
+    (v) => v,
   );
 
   const mustNotContainOptions = useSelectorOptions(
     form.values.mustNotContain,
-    (v) => v
+    (v) => v,
   );
 
   const action = useArrayAction<Language.ProfileItem>((fn) => {
@@ -120,7 +134,7 @@ const ProfileEditForm: FunctionComponent<Props> = ({
       1 +
       form.values.items.reduce<number>(
         (val, item) => Math.max(item.id, val),
-        0
+        0,
       );
 
     if (languages.length > 0) {
@@ -140,78 +154,88 @@ const ProfileEditForm: FunctionComponent<Props> = ({
     }
   }, [form, languages]);
 
-  const columns = useMemo<Column<Language.ProfileItem>[]>(
+  const LanguageCell = React.memo(
+    ({ item, index }: { item: Language.ProfileItem; index: number }) => {
+      const code = useMemo(
+        () =>
+          languageOptions.options.find((l) => l.value.code2 === item.language)
+            ?.value ?? null,
+        [item.language],
+      );
+
+      return (
+        <Selector
+          {...languageOptions}
+          className="table-select"
+          value={code}
+          onChange={(value) => {
+            if (value) {
+              item.language = value.code2;
+              action.mutate(index, { ...item, language: value.code2 });
+            }
+          }}
+        ></Selector>
+      );
+    },
+  );
+
+  const SubtitleTypeCell = React.memo(
+    ({ item, index }: { item: Language.ProfileItem; index: number }) => {
+      const selectValue = useMemo(() => {
+        if (item.forced === "True") {
+          return "forced";
+        } else if (item.hi === "True") {
+          return "hi";
+        } else {
+          return "normal";
+        }
+      }, [item.forced, item.hi]);
+
+      return (
+        <Select
+          value={selectValue}
+          data={subtitlesTypeOptions}
+          onChange={(value) => {
+            if (value) {
+              action.mutate(index, {
+                ...item,
+                hi: value === "hi" ? "True" : "False",
+                forced: value === "forced" ? "True" : "False",
+              });
+            }
+          }}
+        ></Select>
+      );
+    },
+  );
+
+  const columns = useMemo<ColumnDef<Language.ProfileItem>[]>(
     () => [
       {
-        Header: "ID",
-        accessor: "id",
+        header: "ID",
+        accessorKey: "id",
       },
       {
-        Header: "Language",
-        accessor: "language",
-        Cell: ({ value: code, row: { original: item, index } }) => {
-          const language = useMemo(
-            () =>
-              languageOptions.options.find((l) => l.value.code2 === code)
-                ?.value ?? null,
-            [code]
-          );
-
-          const { classes } = useTableStyles();
-
-          return (
-            <Selector
-              {...languageOptions}
-              className={classes.select}
-              value={language}
-              onChange={(value) => {
-                if (value) {
-                  item.language = value.code2;
-                  action.mutate(index, { ...item, language: value.code2 });
-                }
-              }}
-            ></Selector>
-          );
+        header: "Language",
+        accessorKey: "language",
+        cell: ({ row: { original: item, index } }) => {
+          return <LanguageCell item={item} index={index} />;
         },
       },
       {
-        Header: "Subtitles Type",
-        accessor: "forced",
-        Cell: ({ row: { original: item, index }, value }) => {
-          const selectValue = useMemo(() => {
-            if (item.forced === "True") {
-              return "forced";
-            } else if (item.hi === "True") {
-              return "hi";
-            } else {
-              return "normal";
-            }
-          }, [item.forced, item.hi]);
-
-          return (
-            <Select
-              value={selectValue}
-              data={subtitlesTypeOptions}
-              onChange={(value) => {
-                if (value) {
-                  action.mutate(index, {
-                    ...item,
-                    hi: value === "hi" ? "True" : "False",
-                    forced: value === "forced" ? "True" : "False",
-                  });
-                }
-              }}
-            ></Select>
-          );
+        header: "Subtitles Type",
+        accessorKey: "forced",
+        cell: ({ row: { original: item, index } }) => {
+          return <SubtitleTypeCell item={item} index={index} />;
         },
       },
       {
-        Header: "Exclude If Matching Audio",
-        accessor: "audio_exclude",
-        Cell: ({ row: { original: item, index }, value }) => {
+        header: "Exclude If Matching Audio",
+        accessorKey: "audio_exclude",
+        cell: ({ row: { original: item, index } }) => {
           return (
             <Checkbox
-              checked={value === "True"}
+              checked={item.audio_exclude === "True"}
               onChange={({ currentTarget: { checked } }) => {
                 action.mutate(index, {
                   ...item,
@@ -225,20 +249,19 @@ const ProfileEditForm: FunctionComponent<Props> = ({
       },
       {
         id: "action",
-        accessor: "id",
-        Cell: ({ row }) => {
+        cell: ({ row }) => {
           return (
             <Action
               label="Remove"
               icon={faTrash}
-              color="red"
+              c="red"
               onClick={() => action.remove(row.index)}
             ></Action>
           );
         },
       },
     ],
-    [action, languageOptions]
+    [action, LanguageCell, SubtitleTypeCell],
   );
 
   return (
@@ -250,29 +273,40 @@ const ProfileEditForm: FunctionComponent<Props> = ({
       })}
     >
       <Stack>
-        <TextInput label="Name" {...form.getInputProps("name")}></TextInput>
+        <Flex
+          direction={{ base: "column", sm: "row" }}
+          gap="sm"
+          className={styles.evenly}
+        >
+          <TextInput label="Name" {...form.getInputProps("name")}></TextInput>
+          <TextInput
+            label="Tag"
+            {...form.getInputProps("tag")}
+            onBlur={() =>
+              form.setFieldValue(
+                "tag",
+                (prev) =>
+                  prev?.toLowerCase().trim().replace(/\s+/g, "_") ?? undefined,
+              )
+            }
+          ></TextInput>
+        </Flex>
         <Accordion
           multiple
           chevronPosition="right"
           defaultValue={["Languages"]}
-          styles={(theme) => ({
-            content: {
-              [theme.fn.smallerThan("md")]: {
-                padding: 0,
-              },
-            },
-          })}
+          className={styles.content}
         >
           <Accordion.Item value="Languages">
             <Stack>
-              {form.errors.items}
               <SimpleTable
                 columns={columns}
                 data={form.values.items}
               ></SimpleTable>
-              <Button fullWidth color="light" onClick={addItem}>
+              <Button fullWidth onClick={addItem}>
                 Add Language
               </Button>
+              <Text c="var(--mantine-color-error)">{form.errors.items}</Text>
               <Selector
                 clearable
                 label="Cutoff"
@@ -332,5 +366,5 @@ export const ProfileEditModal = withModal(
   {
     title: "Edit Languages Profile",
     size: "xl",
-  }
+  },
 );

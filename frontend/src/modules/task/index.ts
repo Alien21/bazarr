@@ -1,10 +1,10 @@
-import { LOG } from "@/utilities/console";
 import {
   hideNotification,
   showNotification,
   updateNotification,
 } from "@mantine/notifications";
 import { uniqueId } from "lodash";
+import { LOG } from "@/utilities/console";
 import { notification } from "./notification";
 
 class TaskDispatcher {
@@ -59,7 +59,7 @@ class TaskDispatcher {
               group,
               task.description,
               index,
-              tasks.length
+              tasks.length,
             );
             updateNotification(notifyInProgress);
 
@@ -107,34 +107,39 @@ class TaskDispatcher {
 
   public updateProgress(items: Site.Progress[]) {
     items.forEach((item) => {
-      // TODO: FIX ME!
-      item.value += 1;
-
-      if (item.value >= item.count && this.progress[item.id]) {
-        updateNotification(notification.progress.end(item.id, item.header));
-        delete this.progress[item.id];
-      } else if (item.value > 1 && this.progress[item.id]) {
-        updateNotification(
-          notification.progress.update(
-            item.id,
-            item.header,
-            item.name,
-            item.value,
-            item.count
-          )
-        );
-      } else if (item.value > 1 && this.progress[item.id] === undefined) {
+      if (this.progress[item.id] === undefined) {
         showNotification(notification.progress.pending(item.id, item.header));
         this.progress[item.id] = true;
         setTimeout(() => this.updateProgress([item]), 1000);
+
+        return;
       }
+
+      if (item.value >= item.count) {
+        updateNotification(notification.progress.end(item.id, item.header));
+        delete this.progress[item.id];
+
+        return;
+      }
+
+      item.value += 1;
+
+      updateNotification(
+        notification.progress.update(
+          item.id,
+          item.header,
+          item.name,
+          item.value,
+          item.count,
+        ),
+      );
     });
   }
 
   public removeProgress(ids: string[]) {
     setTimeout(
-      () => ids.forEach(hideNotification),
-      notification.PROGRESS_TIMEOUT
+      () => ids.forEach((id) => hideNotification(id)),
+      notification.PROGRESS_TIMEOUT,
     );
   }
 }

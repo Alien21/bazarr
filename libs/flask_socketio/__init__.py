@@ -33,15 +33,13 @@ class _SocketIOMiddleware(socketio.WSGIApp):
     """
     def __init__(self, socketio_app, flask_app, socketio_path='socket.io'):
         self.flask_app = flask_app
-        super(_SocketIOMiddleware, self).__init__(socketio_app,
-                                                  flask_app.wsgi_app,
-                                                  socketio_path=socketio_path)
+        super().__init__(socketio_app, flask_app.wsgi_app,
+                         socketio_path=socketio_path)
 
     def __call__(self, environ, start_response):
         environ = environ.copy()
         environ['flask.app'] = self.flask_app
-        return super(_SocketIOMiddleware, self).__call__(environ,
-                                                         start_response)
+        return super().__call__(environ, start_response)
 
 
 class _ManagedSession(dict, SessionMixin):
@@ -51,7 +49,7 @@ class _ManagedSession(dict, SessionMixin):
     pass
 
 
-class SocketIO(object):
+class SocketIO:
     """Create a Flask-SocketIO server.
 
     :param app: The flask application instance. If the application instance
@@ -167,6 +165,7 @@ class SocketIO(object):
                             fatal errors are logged even when
                             ``engineio_logger`` is ``False``.
     """
+    reason = socketio.Server.reason
 
     def __init__(self, app=None, **kwargs):
         self.server = None
@@ -204,7 +203,7 @@ class SocketIO(object):
             if url:
                 if url.startswith(('redis://', "rediss://")):
                     queue_class = socketio.RedisManager
-                elif url.startswith(('kafka://')):
+                elif url.startswith('kafka://'):
                     queue_class = socketio.KafkaManager
                 elif url.startswith('zmq'):
                     queue_class = socketio.ZmqManager
@@ -220,7 +219,7 @@ class SocketIO(object):
             # changes when it is invoked inside or outside the app context
             # so here to prevent any ambiguities we replace it with wrappers
             # that ensure that the app context is always present
-            class FlaskSafeJSON(object):
+            class FlaskSafeJSON:
                 @staticmethod
                 def dumps(*args, **kwargs):
                     with app.app_context():
@@ -248,7 +247,7 @@ class SocketIO(object):
             self.server.register_namespace(namespace_handler)
 
         if app is not None:
-            # here we attach the SocketIO middlware to the SocketIO object so
+            # here we attach the SocketIO middleware to the SocketIO object so
             # it can be referenced later if debug middleware needs to be
             # inserted
             self.sockio_mw = _SocketIOMiddleware(self.server, app,
@@ -279,7 +278,18 @@ class SocketIO(object):
         def decorator(handler):
             @wraps(handler)
             def _handler(sid, *args):
-                return self._handle_event(handler, message, namespace, sid,
+                nonlocal namespace
+                real_ns = namespace
+                if namespace == '*':
+                    real_ns = sid
+                    sid = args[0]
+                    args = args[1:]
+                real_msg = message
+                if message == '*':
+                    real_msg = sid
+                    sid = args[0]
+                    args = [real_msg] + list(args[1:])
+                return self._handle_event(handler, message, real_ns, sid,
                                           *args)
 
             if self.server:
@@ -443,13 +453,15 @@ class SocketIO(object):
         if callback:
             # wrap the callback so that it sets app app and request contexts
             sid = None
+            original_callback = callback
+            original_namespace = namespace
             if has_request_context():
                 sid = getattr(flask.request, 'sid', None)
-            original_callback = callback
+                original_namespace = getattr(flask.request, 'namespace', None)
 
             def _callback_wrapper(*args):
-                return self._handle_event(original_callback, None, namespace,
-                                          sid, *args)
+                return self._handle_event(original_callback, None,
+                                          original_namespace, sid, *args)
 
             if sid:
                 # the callback wrapper above will install a request context
@@ -625,6 +637,7 @@ class SocketIO(object):
             self.sockio_mw.wsgi_app = DebuggedApplication(
                 self.sockio_mw.wsgi_app, evalex=True)
 
+        allow_unsafe_werkzeug = kwargs.pop('allow_unsafe_werkzeug', False)
         if self.server.eio.async_mode == 'threading':
             try:
                 import simple_websocket  # noqa: F401
@@ -632,8 +645,6 @@ class SocketIO(object):
                 from werkzeug._internal import _log
                 _log('warning', 'WebSocket transport not available. Install '
                                 'simple-websocket for improved performance.')
-            allow_unsafe_werkzeug = kwargs.pop('allow_unsafe_werkzeug',
-                                               False)
             if not sys.stdin or not sys.stdin.isatty():  # pragma: no cover
                 if not allow_unsafe_werkzeug:
                     raise RuntimeError('The Werkzeug web server is not '
@@ -685,17 +696,15 @@ class SocketIO(object):
             from gevent import pywsgi
             try:
                 from geventwebsocket.handler import WebSocketHandler
-                websocket = True
+                gevent_websocket = True
             except ImportError:
-                app.logger.warning(
-                    'WebSocket transport not available. Install '
-                    'gevent-websocket for improved performance.')
-                websocket = False
+                # WebSocket support will come from the simple-websocket package
+                gevent_websocket = False
 
             log = 'default'
             if not log_output:
                 log = None
-            if websocket:
+            if gevent_websocket:
                 self.wsgi_server = pywsgi.WSGIServer(
                     (host, port), app, handler_class=WebSocketHandler,
                     log=log, **kwargs)
@@ -744,7 +753,7 @@ class SocketIO(object):
         :param kwargs: keyword arguments to pass to the function.
 
         This function returns an object that represents the background task,
-        on which the ``join()`` methond can be invoked to wait for the task to
+        on which the ``join()`` method can be invoked to wait for the task to
         complete.
         """
         return self.server.start_background_task(target, *args, **kwargs)
@@ -824,6 +833,8 @@ class SocketIO(object):
                         ret = handler()
                 else:
                     ret = handler(*args)
+            except ConnectionRefusedError:
+                raise  # let this error bubble up to python-socketio
             except:
                 err_handler = self.exception_handlers.get(
                     namespace, self.default_exception_handler)
@@ -944,7 +955,6 @@ def call(event, *args, **kwargs):  # pragma: no cover
 
     socketio = flask.current_app.extensions['socketio']
     return socketio.call(event, *args, namespace=namespace, to=to,
-                         include_self=False, skip_sid=None,
                          ignore_queue=ignore_queue, timeout=timeout)
 
 

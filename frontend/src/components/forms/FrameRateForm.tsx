@@ -1,10 +1,10 @@
+import { FunctionComponent } from "react";
+import { Button, Divider, Group, NumberInput, Stack } from "@mantine/core";
+import { useForm } from "@mantine/form";
 import { useSubtitleAction } from "@/apis/hooks";
 import { useModals, withModal } from "@/modules/modals";
 import { task } from "@/modules/task";
 import FormUtils from "@/utilities/form";
-import { Button, Divider, Group, NumberInput, Stack } from "@mantine/core";
-import { useForm } from "@mantine/form";
-import { FunctionComponent } from "react";
 
 const TaskName = "Changing Frame Rate";
 
@@ -28,12 +28,12 @@ const FrameRateForm: FunctionComponent<Props> = ({ selections, onSubmit }) => {
     },
     validate: {
       from: FormUtils.validation(
-        (value) => value > 0,
-        "The From value must be larger than 0"
+        (value: number) => value > 0,
+        "The From value must be larger than 0",
       ),
       to: FormUtils.validation(
-        (value) => value > 0,
-        "The To value must be larger than 0"
+        (value: number) => value > 0,
+        "The To value must be larger than 0",
       ),
     },
   });
@@ -47,7 +47,7 @@ const FrameRateForm: FunctionComponent<Props> = ({ selections, onSubmit }) => {
           task.create(s.path, TaskName, mutateAsync, {
             action,
             form: s,
-          })
+          }),
         );
 
         onSubmit?.();
@@ -55,15 +55,17 @@ const FrameRateForm: FunctionComponent<Props> = ({ selections, onSubmit }) => {
       })}
     >
       <Stack>
-        <Group spacing="xs" grow>
+        <Group gap="xs" grow>
           <NumberInput
             placeholder="From"
-            precision={2}
+            decimalScale={2}
+            fixedDecimalScale
             {...form.getInputProps("from")}
           ></NumberInput>
           <NumberInput
             placeholder="To"
-            precision={2}
+            decimalScale={2}
+            fixedDecimalScale
             {...form.getInputProps("to")}
           ></NumberInput>
         </Group>
