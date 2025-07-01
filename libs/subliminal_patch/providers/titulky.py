@@ -4,8 +4,9 @@ import io
 import logging
 import re
 import zipfile
+import time
 from random import randint
-from urllib.parse import urljoin, urlparse, parse_qs, quote
+from urllib.parse import urlparse, parse_qs, quote
 
 import rarfile
 from guessit import guessit
@@ -23,6 +24,8 @@ from subliminal_patch.providers import Provider
 from subliminal_patch.providers.mixins import ProviderSubtitleArchiveMixin
 
 from subliminal_patch.subtitle import Subtitle, guess_matches
+
+from subliminal_patch.pitcher import pitchers, load_verification, store_verification
 
 from dogpile.cache.api import NO_VALUE
 from subzero.language import Language
@@ -107,10 +110,16 @@ class TitulkyProvider(Provider, ProviderSubtitleArchiveMixin):
     hash_verifiable = False
     hearing_impaired_verifiable = False
 
-    server_url = 'https://premium.titulky.com'
-    login_url = server_url
-    logout_url = f"{server_url}?action=logout"
-    download_url = f"{server_url}/download.php?id="
+    premium_server_url = 'https://premium.titulky.com'
+    normal_server_url = 'https://www.titulky.com'
+    premium_login_url = premium_server_url
+    normal_login_url = normal_server_url
+    premium_logout_url = f"{premium_server_url}?action=logout"
+    normal_logout_url = f"{normal_server_url}?action=logout"
+    premium_download_url = f"{premium_server_url}/download.php?id="
+    normal_download_url = f"{normal_server_url}/idown.php?R=&zip=&histstamp=&toUTF=1&T=1-1652287319136&titulky="
+    captcha_img_url = f"{normal_server_url}/captcha/captcha.php"
+    captcha_url = f"{normal_server_url}/idown.php"
 
     timeout = 30
     max_threads = 5
@@ -131,120 +140,162 @@ class TitulkyProvider(Provider, ProviderSubtitleArchiveMixin):
         self.password = password
         self.approved_only = approved_only
 
-        self.session = None
+        self.premium_session = None
+        self.normal_session = None
 
     def initialize(self):
-        self.session = Session()
+        self.premium_session = Session()
+        self.normal_session = Session()
 
         # Set headers
         cached_user_agent = cache.get('titulky_user_agent')
         if cached_user_agent == NO_VALUE:
             new_user_agent = AGENT_LIST[randint(0, len(AGENT_LIST) - 1)]
             cache.set('titulky_user_agent', new_user_agent)
-            self.session.headers['User-Agent'] = new_user_agent
+            self.premium_session.headers['User-Agent'] = new_user_agent
+            self.normal_session.headers['User-Agent'] = new_user_agent
         else:
-            self.session.headers['User-Agent'] = cached_user_agent
+            self.premium_session.headers['User-Agent'] = cached_user_agent
+            self.normal_session.headers['User-Agent'] = cached_user_agent
 
-        self.session.headers['Accept'] = 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8'
-        self.session.headers['Accept-Language'] = 'sk,cz,en;q=0.5'
-        self.session.headers['Accept-Encoding'] = 'gzip, deflate'
-        self.session.headers['DNT'] = '1'
-        self.session.headers['Connection'] = 'keep-alive'
-        self.session.headers['Upgrade-Insecure-Requests'] = '1'
-        self.session.headers['Cache-Control'] = 'max-age=0'
+        self.premium_session.headers['Accept'] = 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8'
+        self.normal_session.headers['Accept'] = 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8'
+        self.premium_session.headers['Accept-Language'] = 'cz,sk,en;q=0.5'
+        self.normal_session.headers['Accept-Language'] = 'cz,sk,en;q=0.5'
+        self.premium_session.headers['Accept-Encoding'] = 'gzip, deflate'
+        self.normal_session.headers['Accept-Encoding'] = 'gzip, deflate'
+        self.premium_session.headers['DNT'] = '1'
+        self.normal_session.headers['DNT'] = '1'
+        self.premium_session.headers['Connection'] = 'keep-alive'
+        self.normal_session.headers['Connection'] = 'keep-alive'
+        self.premium_session.headers['Upgrade-Insecure-Requests'] = '1'
+        self.normal_session.headers['Upgrade-Insecure-Requests'] = '1'
+        self.premium_session.headers['Cache-Control'] = 'max-age=0'
+        self.normal_session.headers['Cache-Control'] = 'max-age=0'
 
         self.login()
 
     def terminate(self):
-        self.session.close()
+        self.premium_session.close()
+        self.normal_session.close()
 
     def login(self, bypass_cache=False):
         # Reuse all cookies if found in cache and skip login.
-        cached_cookiejar = cache.get('titulky_cookiejar')
+        cached_cookiejar = cache.get('premium_titulky_cookiejar')
         if not bypass_cache and cached_cookiejar != NO_VALUE:
-            logger.info("Titulky.com: Reusing cached cookies.")
-            self.session.cookies.update(cached_cookiejar)
+            logger.info("Titulky.com: Reusing cached premium cookies.")
+            self.premium_session.cookies.update(cached_cookiejar)
+            # return True
+        else:
+            logger.info("Titulky.com: Logging in to premium server...")
+
+            data = {'LoginName': self.username, 'LoginPassword': self.password}
+            res = self.premium_session.post(self.premium_server_url,
+                                    data,
+                                    allow_redirects=False,
+                                    timeout=self.timeout,
+                                    headers={'Referer': self.premium_server_url})
+
+            location_qs = parse_qs(urlparse(res.headers['Location']).query)
+
+            # If the response is a redirect and doesnt point to an error message page, then we are logged in
+            if not (res.status_code == 302 and location_qs['msg_type'][0] == 'i'):
+                raise AuthenticationError("Login to premium server failed")
+            else:
+                if 'omezené' in location_qs['msg'][0]:
+                    raise AuthenticationError("V.I.P. account is required for this provider to work!")
+                else:
+                    logger.info("Titulky.com: Successfully logged in to premium server, caching cookies for future connections...")
+                    cache.set('premium_titulky_cookiejar', self.premium_session.cookies.copy())
+                    # return True
+
+        # Reuse all cookies if found in cache and skip login.
+        cached_cookiejar = cache.get('normal_titulky_cookiejar')
+        if not bypass_cache and cached_cookiejar != NO_VALUE:
+            logger.info("Titulky.com: Reusing cached normal cookies.")
+            self.normal_session.cookies.update(cached_cookiejar)
             return True
 
-        logger.debug("Titulky.com: Logging in...")
+        logger.info("Titulky.com: Logging in to normal server...")
 
-        data = {'LoginName': self.username, 'LoginPassword': self.password}
-        res = self.session.post(self.server_url,
+        data = {'Login': self.username, 'Detail2': '', 'prihlasit': 'Přihlásit', 'Detail2': '', 'Password': self.password, 'foreverlog': '1'}
+        res = self.normal_session.post(self.normal_server_url,
                                 data,
                                 allow_redirects=False,
                                 timeout=self.timeout,
-                                headers={'Referer': self.server_url})
-
-        location_qs = parse_qs(urlparse(res.headers['Location']).query)
+                                headers={'Referer': self.normal_server_url})
 
         # If the response is a redirect and doesnt point to an error message page, then we are logged in
-        if res.status_code == 302 and location_qs['msg_type'][0] == 'i':
-            if 'omezené' in location_qs['msg'][0].lower():
-                raise AuthenticationError("V.I.P. account is required for this provider to work!")
-            else:
-                logger.info("Titulky.com: Successfully logged in, caching cookies for future connections...")
-                cache.set('titulky_cookiejar', self.session.cookies.copy())
-                return True
+        if not (res.status_code == 200 and res.text.find("/?welcome") > 0):
+            raise AuthenticationError("Login to normal server failed")
         else:
-            raise AuthenticationError("Login failed")
+            logger.info("Titulky.com: Successfully logged in to normal server, caching cookies for future connections...")
+            cache.set('normal_titulky_cookiejar', self.normal_session.cookies.copy())
+            # return True
 
     def logout(self):
         logger.info("Titulky.com: Logging out")
 
-        res = self.session.get(self.logout_url,
+        res = self.premium_session.get(self.premium_logout_url,
                                allow_redirects=False,
                                timeout=self.timeout,
-                               headers={'Referer': self.server_url})
+                               headers={'Referer': self.premium_server_url})
 
         location_qs = parse_qs(urlparse(res.headers['Location']).query)
 
+        res = self.normal_session.get(self.normal_logout_url,
+                               allow_redirects=False,
+                               timeout=self.timeout,
+                               headers={'Referer': self.normal_server_url})
+
+        # location_qs = parse_qs(urlparse(res.headers['Location']).query)
+
         logger.info("Titulky.com: Clearing cache...")
-        cache.delete('titulky_cookiejar')
+        cache.delete('premium_titulky_cookiejar')
+        cache.delete('normal_titulky_cookiejar')
         cache.delete('titulky_user_agent')
 
         # If the response is a redirect and doesnt point to an error message page, then we are logged out
-        if res.is_redirect and location_qs['msg_type'][0] == 'i':
+        if res.status_code == 302 and location_qs['msg_type'][0] == 'i':
             return True
         else:
             raise AuthenticationError("Logout failed.")
 
     # GET request a page. This functions acts as a requests.session.get proxy handling expired cached cookies
     # and subsequent relogging and sending the original request again. If all went well, returns the response.
-    # Additionally handle allow_redirects by ourselves to follow redirects UNLESS they are redirecting to an
-    # error page. In such case we would like to know what has happend and act accordingly.
-    def get_request(self, url, ref=server_url, allow_redirects=False, _recursion=0):
+    def get_request(self, url, ref=premium_server_url, allow_redirects=False, _recursion=0):
         # That's deep... recursion... Stop. We don't have infinite memmory. And don't want to
         # spam titulky's server either. So we have to just accept the defeat. Let it throw!
-        if _recursion >= 10:
-            raise AuthenticationError("Got into a redirect loop! Oops.")
+        if _recursion >= 5:
+            raise AuthenticationError("Got into a loop and couldn't get authenticated!")
 
         logger.debug(f"Titulky.com: Fetching url: {url}")
 
-        res = self.session.get(
-            url,
-            timeout=self.timeout,
-            allow_redirects=False,
-            headers={'Referer': quote(ref) if ref else None})  # URL encode ref if it has value
+        if url.find(self.premium_server_url) != 0:
+            res = self.normal_session.get(
+                url,
+                timeout=self.timeout,
+                allow_redirects=allow_redirects,
+                headers={'Referer': quote(ref) if ref else None})  # URL encode ref if it has value
+        else:
+            res = self.premium_session.get(
+                url,
+                timeout=self.timeout,
+                allow_redirects=allow_redirects,
+                headers={'Referer': quote(ref) if ref else None})  # URL encode ref if it has value
 
-        if res.is_redirect:
-            # Dont bother doing anything if we do not want to redirect. Just return the original response..
-            if allow_redirects is False:
-                return res
-            
+        # Check if we got redirected because login cookies expired.
+        # Note: microoptimization - don't bother parsing qs for non 302 responses.
+        if res.status_code == 302:
             location_qs = parse_qs(urlparse(res.headers['Location']).query)
-            # If the msg_type query parameter does NOT equal to 'e' or is absent, follow the URL in the Location header.
-            if allow_redirects is True and ('msg_type' not in location_qs or ('msg_type' in location_qs and location_qs['msg_type'][0] != 'e')):
-                return self.get_request(urljoin(res.headers['Origin'] or self.server_url, res.headers['Location']), ref=url, allow_redirects=True, _recursion=(_recursion + 1))
-            
-            # Check if we got redirected because login cookies expired.
-            if "přihlašte" in location_qs['msg'][0].lower():
-                logger.info(f"Titulky.com: Login cookies expired.")
+            if location_qs['msg_type'][0] == 'e' and "Přihlašte se" in location_qs['msg'][0]:
+                logger.info(f"Titulky.com: Login premium cookies expired.")
                 self.login(True)
-                return self.get_request(url, ref=ref, allow_redirects=True, _recursion=(_recursion + 1))
+                return self.get_request(url, ref=ref, _recursion=(_recursion + 1))
 
         return res
 
-    def fetch_page(self, url, ref=server_url, allow_redirects=False):
+    def fetch_page(self, url, ref=premium_server_url, allow_redirects=False):
         res = self.get_request(url, ref=ref, allow_redirects=allow_redirects)
 
         if res.status_code != 200:
@@ -255,7 +306,7 @@ class TitulkyProvider(Provider, ProviderSubtitleArchiveMixin):
         return res.text
 
     def build_url(self, params):
-        result = f"{self.server_url}/?"
+        result = f"{self.premium_server_url}/?"
 
         for key, value in params.items():
             result += f'{key}={value}&'
@@ -335,13 +386,14 @@ class TitulkyProvider(Provider, ProviderSubtitleArchiveMixin):
                 if release_info == '???':
                     release_info = ''
                 
-                details_link = f"{self.server_url}{anchor.get('href')[1:]}"
+                details_link = f"{self.premium_server_url}{anchor.get('href')[1:]}"
                 
                 id_match = re.findall(r'id=(\d+)', details_link)
                 sub_id = id_match[0] if len(id_match) > 0 else None
-                
-                download_link = f"{self.download_url}{sub_id}"
-                
+                if "pbl0" in row.get("class"):
+                    download_link = f"{self.premium_download_url}{sub_id}"
+                else:
+                    download_link = f"{self.normal_download_url}{sub_id}"
                 # Approved subtitles have a pbl1 class for their row, others have a pbl0 class
                 approved = True if 'pbl1' in row.get('class') else False
 
@@ -441,12 +493,102 @@ class TitulkyProvider(Provider, ProviderSubtitleArchiveMixin):
         return subtitles
 
     def download_subtitle(self, subtitle):
-        res = self.get_request(subtitle.download_link, ref=subtitle.page_link)
+        if subtitle.download_link.find(self.premium_download_url) != 0:
+            for i in range(3):
+                logger.debug("Titulky.com: Trying download subtitle %d/3...", i + 1)
 
-        try:
-            res.raise_for_status()
-        except:
-            raise HTTPError(f"An error occured during the download request to {subtitle.download_link}")
+                html_src = self.fetch_page(subtitle.download_link, ref=subtitle.page_link)
+
+                down_page = ParserBeautifulSoup(html_src, ['lxml', 'html.parser'])
+
+                captcha_img = down_page.find('img', src='./captcha/captcha.php')
+                if captcha_img:
+                    logger.debug("Titulky.com: Found CAPTCHA code.")
+
+                    try:
+                        # Reading CAPTCHA image
+                        res = self.get_request(self.captcha_img_url, ref=subtitle.page_link)
+
+                        res.raise_for_status()
+                    except:
+                        if i >= 2:
+                            raise HTTPError(f"An error occured during reading CAPTCHA image '#{subtitle.id}' - {self.captcha_url} !!!")
+                        else:
+                            logger.error("Titulky.com: Error in reading CAPTCHA code !!!")
+                            continue
+
+                    # Calling anti-captcha
+                    pitcher = pitchers.get_pitcher("AntiCaptchaImageProxyLess")("Titulky.com", io.BytesIO(res.content),
+                                                     user_agent=self.normal_session.headers["User-Agent"],
+                                                     cookies=self.normal_session.cookies.get_dict(),
+                                                     is_invisible=True)
+
+                    captcha_code = pitcher.throw().replace("0", "O").strip()
+                    logger.debug("Titulky.com: CAPTCHA code: '%s'", captcha_code)
+                    if not captcha_code:
+                        logger.error("Titulky.com: Couldn't solve CAPTCHA code !!!")
+                        continue
+
+                    try:
+                        # Sending captcha code
+                        data = {'downkod': captcha_code, 'securedown': "2", "zip": "", "T": "1-1652287319136", "titulky": subtitle.id, "histstamp": ""}
+                        res = self.normal_session.post(self.captcha_url,
+                                                data,
+                                                allow_redirects=False,
+                                                timeout=self.timeout,
+                                                headers={'Referer': self.normal_server_url})
+
+                        res.raise_for_status()
+                    except:
+                        if i >= 2:
+                            raise HTTPError(f"An error occured during sending CAPTCHA code '#{subtitle.id}' - {self.captcha_url} !!!")
+                        else:
+                            logger.error("Titulky.com: Error in sending CAPTCHA code !!!")
+                            continue
+
+                    down_page = ParserBeautifulSoup(res.text, ['lxml', 'html.parser'])
+
+                    start_pos = down_page.text.find("CHYBA -")
+                    if (start_pos >= 0):
+                        error_mssage = down_page.text[start_pos:]
+                        end_pos = error_mssage.find("\n")
+                        if end_pos <= 0:
+                            end_pos = 40
+
+                        error_mssage = error_mssage[0: end_pos]
+                        logger.error("Titulky.com: Error in CAPTCHA code: %s !!!", error_mssage)
+                        continue
+                    else:
+                        break
+
+            down_url_link = down_page.find('a', id='downlink')
+            if not down_url_link:
+                logger.error("Titulky.com: Cannot find downlink (%s) !!!", subtitle.download_link)
+                return
+
+            down_url = "https://" + down_url_link.contents[0].strip()
+
+            delay = down_page.find('body').get('onload')
+
+            if delay != None and "CountDown" in delay and delay.find("(") != -1:
+                delay = int(delay[delay.find("(") + 1: delay.find(")")]) + 0.5
+                logger.debug(f"Titulky.com: Delay {delay}s before downloading.")
+                time.sleep(delay)
+
+            try:
+                # Calling download subtitle
+                res = self.get_request(down_url, ref=subtitle.page_link)
+
+                res.raise_for_status()
+            except:
+                raise HTTPError(f"Titulky.com: Error downloading subtitle from normal serer !!! '{down_url}'")
+        else:
+            res = self.get_request(subtitle.download_link, ref=subtitle.page_link)
+
+            try:
+                res.raise_for_status()
+            except:
+                logger.error(f"Titulky.com: Error downloading subtitle from premium server !!! '{subtitle.download_link}'")
 
         archive_stream = io.BytesIO(res.content)
         archive = None
@@ -461,11 +603,7 @@ class TitulkyProvider(Provider, ProviderSubtitleArchiveMixin):
         else:
             subtitle_content = fix_line_ending(res.content)
 
-        if archive and len(archive.infolist()) > 1 and not subtitle_content:
-            logger.info(f"Titulky.com: Couldn't find a proper subtitle file in the downloaded archive.")
-        elif archive and len(archive.infolist()) == 1 and not subtitle_content:
-            raise DownloadLimitExceeded("Subtitles download limit has been exceeded")
-        elif not subtitle_content:
-            raise ProviderError("No subtitles provided from titulky")
-
-        subtitle.content = subtitle_content
+        if subtitle_content:
+            subtitle.content = subtitle_content
+        else:
+            logger.error("Titulky.com: Subtitle is empty (%s) !!!", subtitle.download_link)

@@ -185,6 +185,7 @@ declare namespace Wanted {
     SceneNameType & {
       hearing_impaired: boolean;
       missing_subtitles: Subtitle[];
+      path: string;
     };
 
   type Episode = Base &

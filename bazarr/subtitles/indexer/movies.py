@@ -140,7 +140,7 @@ def store_subtitles_movie(original_path, reversed_path, use_cache=True):
         for movie in matching_movies:
             if movie:
                 logging.debug(f"BAZARR storing those languages to DB: {actual_subtitles}")
-                list_missing_subtitles_movies(no=movie.radarrId)
+                list_missing_subtitles_movies(no=movie.radarrId, subtitles=actual_subtitles)
             else:
                 logging.debug(f"BAZARR haven't been able to update existing subtitles to DB: {actual_subtitles}")
     else:
@@ -151,7 +151,7 @@ def store_subtitles_movie(original_path, reversed_path, use_cache=True):
     return actual_subtitles
 
 
-def list_missing_subtitles_movies(no=None, send_event=True):
+def list_missing_subtitles_movies(no=None, send_event=True, subtitles=None):
     if no:
         movies_subtitles = database.execute(
             select(TableMovies.radarrId,
@@ -167,8 +167,6 @@ def list_missing_subtitles_movies(no=None, send_event=True):
                    TableMovies.profileId,
                    TableMovies.audio_language)) \
             .all()
-
-    use_embedded_subs = settings.general.use_embedded_subs
 
     for movie_subtitles in movies_subtitles:
         missing_subtitles_text = '[]'
@@ -186,11 +184,12 @@ def list_missing_subtitles_movies(no=None, send_event=True):
 
             # get existing subtitles
             actual_subtitles_list = []
-            if movie_subtitles.subtitles is not None:
-                if use_embedded_subs:
-                    actual_subtitles_temp = ast.literal_eval(movie_subtitles.subtitles)
-                else:
-                    actual_subtitles_temp = [x for x in ast.literal_eval(movie_subtitles.subtitles) if x[1]]
+            if subtitles is None:
+                subtitles = movie_subtitles['subtitles']
+            else:
+                subtitles = subtitles.__str__()
+            if subtitles is not None:
+                actual_subtitles_temp = ast.literal_eval(subtitles) + [x for x in ast.literal_eval(subtitles) if x[1]]
 
                 for subtitles in actual_subtitles_temp:
                     subtitles = subtitles[0].split(':')

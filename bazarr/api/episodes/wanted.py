@@ -68,6 +68,7 @@ class EpisodesWanted(Resource):
                       TableEpisodes.sonarrEpisodeId,
                       TableEpisodes.sceneName,
                       TableShows.tags,
+                      TableShows.path,
                       TableShows.seriesType) \
             .select_from(TableEpisodes) \
             .join(TableShows) \
@@ -87,6 +88,18 @@ class EpisodesWanted(Resource):
             'tags': x.tags,
             'seriesType': x.seriesType,
         }) for x in database.execute(stmt).all()]
+
+        for item in results:
+            if 'path' in item and item['path']:
+                if item['path'].find("/mnt/truecrypt/archive/") >= 0:
+                    item['path'] = item['path'].replace("/mnt/truecrypt/archive/", "")
+                    item['path'] = item['path'][0: item['path'].find("/")]
+                elif item['path'].find("Z:\\") >= 0:
+                    item['path'] = item['path'].replace("Z:\\", "")
+                    item['path'] = item['path'][0: item['path'].find("\\")]
+
+            if not 'sceneName' in item or not item['sceneName']:
+                item['sceneName'] = "No release name"
 
         count = database.execute(
             select(func.count())

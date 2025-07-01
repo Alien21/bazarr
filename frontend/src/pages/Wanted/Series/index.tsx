@@ -3,12 +3,13 @@ import {
   useEpisodeWantedPagination,
   useSeriesAction,
 } from "@/apis/hooks";
+import TextPopover from "@/components/TextPopover";
 import Language from "@/components/bazarr/Language";
 import { TaskGroup, task } from "@/modules/task";
 import WantedView from "@/pages/views/WantedView";
 import { useTableStyles } from "@/styles";
 import { BuildKey } from "@/utilities";
-import { faSearch } from "@fortawesome/free-solid-svg-icons";
+import { faFileLines, faSearch } from "@fortawesome/free-solid-svg-icons";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import { Anchor, Badge, Group, Text } from "@mantine/core";
 import { FunctionComponent, useMemo } from "react";
@@ -43,6 +44,28 @@ const WantedSeriesView: FunctionComponent = () => {
           return <Text className={classes.noWrap}>{value}</Text>;
         },
       },
+
+      {
+        Header: "Path",
+        accessor: "path",
+        Cell: ({ value }) => {
+          const { classes } = useTableStyles();
+          return <Text className={classes.width7em}>{value}</Text>;
+        },
+      },
+      {
+        Header: "Release",
+        accessor: "sceneName",
+        className: "width6em text-center",
+        Cell: ({ row }) => {
+          return (
+            <TextPopover text={row.original.sceneName}>
+              <FontAwesomeIcon size="2x" icon={faFileLines}></FontAwesomeIcon>
+            </TextPopover>
+          );
+        },
+      },
+
       {
         Header: "Missing",
         accessor: "missing_subtitles",

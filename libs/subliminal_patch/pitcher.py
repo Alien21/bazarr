@@ -7,7 +7,7 @@ import logging
 import json
 from subliminal.cache import region
 from dogpile.cache.api import NO_VALUE
-from python_anticaptcha import AnticaptchaClient, NoCaptchaTaskProxylessTask, NoCaptchaTask, AnticaptchaException
+from python_anticaptcha import AnticaptchaClient, ImageToTextTask, NoCaptchaTaskProxylessTask, NoCaptchaTask, AnticaptchaException
 from deathbycaptcha import SocketClient as DBCClient, DEFAULT_TOKEN_TIMEOUT
 import six
 from six.moves import range
@@ -55,18 +55,20 @@ class Pitcher(object):
     job = None
     client = None
     client_key = None
+    image = None
     website_url = None
     website_key = None
     website_name = None
     solve_time = None
     success = False
 
-    def __init__(self, website_name, website_url, website_key, tries=3, client_key=None, *args, **kwargs):
+    def __init__(self, website_name, website_url=None, website_key=None, image=None, tries=3, client_key=None, *args, **kwargs):
         self.tries = tries
         self.client_key = client_key or os.environ.get("ANTICAPTCHA_ACCOUNT_KEY")
         if not self.client_key:
             raise Exception("AntiCaptcha key not given, exiting")
 
+        self.image = image
         self.website_name = website_name
         self.website_key = website_key
         self.website_url = website_url
@@ -104,7 +106,7 @@ class AntiCaptchaProxyLessPitcher(Pitcher):
 
     def __init__(self, website_name, website_url, website_key, tries=3, host=None, language_pool=None,
                  use_ssl=True, is_invisible=False, *args, **kwargs):
-        super(AntiCaptchaProxyLessPitcher, self).__init__(website_name, website_url, website_key, tries=tries, *args,
+        super(AntiCaptchaProxyLessPitcher, self).__init__(website_name, website_url=website_url, website_key=website_key, tries=tries, *args,
                                                           **kwargs)
         self.host = host or self.host
         self.language_pool = language_pool or self.language_pool
@@ -201,7 +203,7 @@ class DBCProxyLessPitcher(Pitcher):
 
     def __init__(self, website_name, website_url, website_key,
                  timeout=DEFAULT_TOKEN_TIMEOUT, tries=3, *args, **kwargs):
-        super(DBCProxyLessPitcher, self).__init__(website_name, website_url, website_key, tries=tries)
+        super(DBCProxyLessPitcher, self).__init__(website_name, website_url=website_url, website_key=website_key, tries=tries)
 
         self.username, self.password = self.client_key.split(":", 1)
         self.timeout = timeout
@@ -270,3 +272,105 @@ def load_verification(site_name, session, callback=lambda x: None):
 
 def store_verification(site_name, session):
     region.set("%s_data" % site_name, (session.cookies._cookies, session.headers["User-Agent"]))
+
+
+
+
+
+
+@registry.register
+class AntiCaptchaImageProxyLessPitcher(Pitcher):
+    name = "AntiCaptchaImageProxyLess"
+    source = "anti-captcha.com"
+    host = "api.anti-captcha.com"
+    language_pool = "en"
+    tries = 5
+    use_ssl = True
+    is_invisible = False
+
+    def __init__(self, website_name, image, tries=3, host=None, language_pool=None, use_ssl=True, is_invisible=False, *args, **kwargs):
+        super(AntiCaptchaImageProxyLessPitcher, self).__init__(website_name, image=image, tries=tries, *args, **kwargs)
+        self.host = host or self.host
+        self.language_pool = language_pool or self.language_pool
+        self.use_ssl = use_ssl
+        self.is_invisible = is_invisible
+
+    def get_client(self):
+        return AnticaptchaClient(self.client_key, self.language_pool, self.host, self.use_ssl)
+
+    def get_job(self):
+        # task = ImageToTextTask(self.image, phrase=False, case=False, numeric=0, math=False, min_length=5, max_length=14)
+        task = ImageToTextTask(self.image)
+        return self.client.createTask(task)
+
+    def _throw(self):
+        for i in range(self.tries):
+            try:
+                super(AntiCaptchaImageProxyLessPitcher, self)._throw()
+                self.job.join()
+                ret = self.job.get_captcha_text()
+                if ret:
+                    self.success = True
+                    return ret
+            except AnticaptchaException as e:
+                if i >= self.tries - 1:
+                    logger.error("%s: Captcha solving finally failed. Exiting", self.website_name)
+                    return
+
+                if e.error_code == 'ERROR_ZERO_BALANCE':
+                    logger.error("%s: No balance left on captcha solving service. Exiting", self.website_name)
+                    return
+
+                elif e.error_code == 'ERROR_NO_SLOT_AVAILABLE':
+                    logger.info("%s: No captcha solving slot available, retrying", self.website_name)
+                    time.sleep(5.0)
+                    continue
+
+                elif e.error_code == 'ERROR_KEY_DOES_NOT_EXIST':
+                    logger.error("%s: Bad AntiCaptcha API key", self.website_name)
+                    return
+
+                elif e.error_id is None and e.error_code == 250:
+                    # timeout
+                    if i < self.tries:
+                        logger.info("%s: Captcha solving timed out, retrying", self.website_name)
+                        time.sleep(1.0)
+                        continue
+                    else:
+                        logger.error("%s: Captcha solving timed out three times; bailing out", self.website_name)
+                        return
+                raise
+
+
+@registry.register
+class AntiCaptchaImagePitcher(AntiCaptchaImageProxyLessPitcher):
+    name = "AntiCaptchaImage"
+    proxy = None
+    needs_proxy = True
+    user_agent = None
+    cookies = None
+
+    def __init__(self, *args, **kwargs):
+        self.proxy = self.parse_url(kwargs.pop("proxy"))
+        self.user_agent = kwargs.pop("user_agent")
+        cookies = kwargs.pop("cookies", {})
+        if isinstance(cookies, dict):
+            self.cookies = ";".join(["%s=%s" % (k, v) for k, v in six.iteritems(cookies)])
+
+        super(AntiCaptchaImagePitcher, self).__init__(*args, **kwargs)
+
+    @staticmethod
+    def parse_url(url):
+        parsed = parse.urlparse(url)
+        return dict(
+            proxy_type=parsed.scheme,
+            proxy_address=parsed.hostname,
+            proxy_port=parsed.port,
+            proxy_login=parsed.username,
+            proxy_password=parsed.password,
+        )
+
+    def get_job(self):
+        # task = ImageToTextTask(self.image, phrase=False, case=False, numeric=0, math=False, min_length=5, max_length=14)
+        task = ImageToTextTask(self.image)
+        return self.client.createTask(task)

@@ -132,14 +132,14 @@ def store_subtitles(original_path, reversed_path, use_cache=True):
             .values(subtitles=str(actual_subtitles))
             .where(TableEpisodes.path == original_path))
         matching_episodes = database.execute(
-            select(TableEpisodes.sonarrEpisodeId, TableEpisodes.sonarrSeriesId)
+            select(TableEpisodes.sonarrEpisodeId, TableEpisodes.sonarrSeriesId, TableEpisodes.subtitles)
             .where(TableEpisodes.path == original_path))\
             .all()
 
         for episode in matching_episodes:
             if episode:
                 logging.debug(f"BAZARR storing those languages to DB: {actual_subtitles}")
-                list_missing_subtitles(epno=episode.sonarrEpisodeId)
+                list_missing_subtitles(epno=episode.sonarrEpisodeId, subtitles=actual_subtitles)
             else:
                 logging.debug(f"BAZARR haven't been able to update existing subtitles to DB: {actual_subtitles}")
     else:
@@ -150,7 +150,7 @@ def store_subtitles(original_path, reversed_path, use_cache=True):
     return actual_subtitles
 
 
-def list_missing_subtitles(no=None, epno=None, send_event=True):
+def list_missing_subtitles(no=None, epno=None, send_event=True, subtitles=None):
     if epno is not None:
         episodes_subtitles_clause = (TableEpisodes.sonarrEpisodeId == epno)
     elif no is not None:
@@ -168,8 +168,6 @@ def list_missing_subtitles(no=None, epno=None, send_event=True):
         .where(episodes_subtitles_clause))\
         .all()
 
-    use_embedded_subs = settings.general.use_embedded_subs
-
     for episode_subtitles in episodes_subtitles:
         missing_subtitles_text = '[]'
         if episode_subtitles.profileId:
@@ -186,11 +184,12 @@ def list_missing_subtitles(no=None, epno=None, send_event=True):
 
             # get existing subtitles
             actual_subtitles_list = []
-            if episode_subtitles.subtitles is not None:
-                if use_embedded_subs:
-                    actual_subtitles_temp = ast.literal_eval(episode_subtitles.subtitles)
-                else:
-                    actual_subtitles_temp = [x for x in ast.literal_eval(episode_subtitles.subtitles) if x[1]]
+            if subtitles is None:
+                subtitles = episode_subtitles['subtitles']
+            else:
+                subtitles = subtitles.__str__()
+            if subtitles is not None:
+                actual_subtitles_temp = ast.literal_eval(subtitles) + [x for x in ast.literal_eval(subtitles) if x[1]]
 
                 for subtitles in actual_subtitles_temp:
                     subtitles = subtitles[0].split(':')
