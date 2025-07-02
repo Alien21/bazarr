@@ -1,7 +1,7 @@
 import { FunctionComponent, useMemo } from "react";
 import { Link } from "react-router";
 import { Anchor, Badge, Group } from "@mantine/core";
-import { faSearch, faFileLines } from "@fortawesome/free-solid-svg-icons";
+import { faFileLines, faSearch } from "@fortawesome/free-solid-svg-icons";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import { ColumnDef } from "@tanstack/react-table";
 import {
@@ -10,10 +10,10 @@ import {
   useSeriesAction,
 } from "@/apis/hooks";
 import Language from "@/components/bazarr/Language";
+import TextPopover from "@/components/TextPopover";
 import { task, TaskGroup } from "@/modules/task";
 import WantedView from "@/pages/views/WantedView";
 import { BuildKey } from "@/utilities";
-import TextPopover from "@/components/TextPopover";
 
 const WantedSeriesView: FunctionComponent = () => {
   const { download } = useEpisodeSubtitleModification();
@@ -46,18 +46,28 @@ const WantedSeriesView: FunctionComponent = () => {
       {
         header: "Path",
         accessorKey: "path",
-        cell: ({ value }) => {
-          const { classes } = useTableStyles();
-          return <Text className={classes.width7em}>{value}</Text>;
+        cell: ({
+          row: {
+            original: { path },
+          },
+        }) => {
+          return (
+            <TextPopover text={path}>
+              <FontAwesomeIcon size="2x" icon={faFileLines}></FontAwesomeIcon>
+            </TextPopover>
+          );
         },
       },
       {
         header: "Release",
         accessorKey: "sceneName",
-        className: "width6em text-center",
-        cell: ({ row }) => {
+        cell: ({
+          row: {
+            original: { sceneName },
+          },
+        }) => {
           return (
-            <TextPopover text={row.original.sceneName}>
+            <TextPopover text={sceneName}>
               <FontAwesomeIcon size="2x" icon={faFileLines}></FontAwesomeIcon>
             </TextPopover>
           );

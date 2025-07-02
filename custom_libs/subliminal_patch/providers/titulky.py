@@ -623,10 +623,11 @@ class TitulkyProvider(Provider, ProviderSubtitleArchiveMixin):
 
             down_url = "https://" + down_url_link.contents[0].strip()
 
-            delay = down_page.find('body').get('onload')
+            delay = down_page.find('body').decode_contents()
 
-            if delay != None and "CountDown" in delay and delay.find("(") != -1:
-                delay = int(delay[delay.find("(") + 1: delay.find(")")]) + 0.5
+            if delay != None and "CountDown" in delay and delay.find("CountDown(") != -1:
+                cd_start = delay.find("CountDown(") + 10
+                delay = int(delay[cd_start : delay.find(")", cd_start)]) + 0.5
                 logger.debug(f"Titulky.com: Delay {delay}s before downloading.")
                 time.sleep(delay)
 
