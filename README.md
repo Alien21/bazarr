@@ -50,6 +50,7 @@ If you need something that is not already part of Bazarr, feel free to create a 
 - Addic7ed
 - AnimeKalesi
 - Animetosho (requires AniDb HTTP API client described [here](https://wiki.anidb.net/HTTP_API_Definition))
+- AnimeSub.info
 - Assrt
 - AvistaZ, CinemaZ (Get session cookies using method described [here](https://github.com/morpheus65535/bazarr/pull/2375#issuecomment-2057010996))
 - BetaSeries
@@ -79,8 +80,10 @@ If you need something that is not already part of Bazarr, feel free to create a 
 - Subs4Series
 - Subscene
 - Subscenter
+- SubsRo
 - Subsunacs.net
 - SubSynchro
+- Subtis
 - Subtitrari-noi.ro
 - subtitri.id.lv
 - Subtitulamos.tv

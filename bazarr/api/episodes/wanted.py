@@ -98,6 +98,9 @@ class EpisodesWanted(Resource):
                 elif item['path'].find("Z:\\") >= 0:
                     item['path'] = item['path'].replace("Z:\\", "")
                     item['path'] = item['path'][0: item['path'].find("\\")]
+                elif item['path'].find("Y:\\") >= 0:
+                    item['path'] = item['path'].replace("Y:\\", "")
+                    item['path'] = item['path'][0: item['path'].find("\\")]
 
             if not 'sceneName' in item or not item['sceneName']:
                 item['sceneName'] = "No release name"

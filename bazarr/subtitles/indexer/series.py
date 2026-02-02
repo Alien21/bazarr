@@ -15,8 +15,9 @@ from app.config import settings
 from utilities.helper import get_subtitle_destination_folder
 from utilities.path_mappings import path_mappings
 from utilities.video_analyzer import embedded_subs_reader
-from app.event_handler import event_stream, show_progress, hide_progress
+from app.event_handler import event_stream
 from subtitles.indexer.utils import guess_external_subtitles, get_external_subtitles_path
+from app.jobs_queue import jobs_queue
 
 gc.enable()
 
@@ -93,8 +94,8 @@ def store_subtitles(original_path, reversed_path, use_cache=True):
                     full_dest_folder_path = os.path.join(os.path.dirname(reversed_path), dest_folder)
             subtitles = guess_external_subtitles(full_dest_folder_path, subtitles, "series",
                                                  previously_indexed_subtitles_to_exclude)
-        except Exception:
-            logging.exception("BAZARR unable to index external subtitles.")
+        except Exception as e:
+            logging.exception(f"BAZARR unable to index external subtitles for this file {reversed_path}: {repr(e)}")
         else:
             for subtitle, language in subtitles.items():
                 valid_language = False
@@ -132,14 +133,14 @@ def store_subtitles(original_path, reversed_path, use_cache=True):
             .values(subtitles=str(actual_subtitles))
             .where(TableEpisodes.path == original_path))
         matching_episodes = database.execute(
-            select(TableEpisodes.sonarrEpisodeId, TableEpisodes.sonarrSeriesId, TableEpisodes.subtitles)
+            select(TableEpisodes.sonarrEpisodeId)
             .where(TableEpisodes.path == original_path))\
             .all()
 
         for episode in matching_episodes:
             if episode:
                 logging.debug(f"BAZARR storing those languages to DB: {actual_subtitles}")
-                list_missing_subtitles(epno=episode.sonarrEpisodeId, subtitles=actual_subtitles)
+                list_missing_subtitles(epno=episode.sonarrEpisodeId)
             else:
                 logging.debug(f"BAZARR haven't been able to update existing subtitles to DB: {actual_subtitles}")
     else:
@@ -150,23 +151,26 @@ def store_subtitles(original_path, reversed_path, use_cache=True):
     return actual_subtitles
 
 
-def list_missing_subtitles(no=None, epno=None, send_event=True, subtitles=None):
-    if epno is not None:
-        episodes_subtitles_clause = (TableEpisodes.sonarrEpisodeId == epno)
-    elif no is not None:
-        episodes_subtitles_clause = (TableEpisodes.sonarrSeriesId == no)
-    else:
-        episodes_subtitles_clause = None
-    episodes_subtitles = database.execute(
-        select(TableShows.sonarrSeriesId,
-               TableEpisodes.sonarrEpisodeId,
-               TableEpisodes.subtitles,
-               TableShows.profileId,
-               TableEpisodes.audio_language)
-        .select_from(TableEpisodes)
+def list_missing_subtitles(no=None, epno=None):
+    stmt = select(TableShows.sonarrSeriesId,
+                  TableEpisodes.sonarrEpisodeId,
+                  TableEpisodes.subtitles,
+                  TableShows.profileId,
+                  TableEpisodes.audio_language) \
+        .select_from(TableEpisodes) \
         .join(TableShows)
-        .where(episodes_subtitles_clause))\
-        .all()
+
+    if epno is not None:
+        episodes_subtitles = database.execute(stmt.where(TableEpisodes.sonarrEpisodeId == epno)).all()
+    elif no is not None:
+        episodes_subtitles = database.execute(stmt.where(TableEpisodes.sonarrSeriesId == no)).all()
+    else:
+        episodes_subtitles = database.execute(stmt).all()
+
+    use_embedded_subs = settings.general.use_embedded_subs
+
+    matches_audio = lambda language: any(x['code2'] == language['language'] for x in get_audio_profile_languages(
+                                episode_subtitles.audio_language))
 
     for episode_subtitles in episodes_subtitles:
         missing_subtitles_text = '[]'
@@ -177,8 +181,10 @@ def list_missing_subtitles(no=None, epno=None, send_event=True, subtitles=None):
             if desired_subtitles_temp:
                 for language in desired_subtitles_temp['items']:
                     if language['audio_exclude'] == "True":
-                        if any(x['code2'] == language['language'] for x in get_audio_profile_languages(
-                                episode_subtitles.audio_language)):
+                        if matches_audio(language):
+                            continue
+                    if language['audio_only_include'] == "True":
+                        if not matches_audio(language):
                             continue
                     desired_subtitles_list.append({'language': language['language'],
                                                    'forced': language['forced'],
@@ -186,12 +192,11 @@ def list_missing_subtitles(no=None, epno=None, send_event=True, subtitles=None):
 
             # get existing subtitles
             actual_subtitles_list = []
-            if subtitles is None:
-                subtitles = episode_subtitles['subtitles']
-            else:
-                subtitles = subtitles.__str__()
-            if subtitles is not None:
-                actual_subtitles_temp = ast.literal_eval(subtitles) + [x for x in ast.literal_eval(subtitles) if x[1]]
+            if episode_subtitles.subtitles is not None:
+                if use_embedded_subs:
+                    actual_subtitles_temp = ast.literal_eval(episode_subtitles.subtitles)
+                else:
+                    actual_subtitles_temp = [x for x in ast.literal_eval(episode_subtitles.subtitles) if x[1]]
 
                 for subtitles in actual_subtitles_temp:
                     subtitles = subtitles[0].split(':')
@@ -218,9 +223,12 @@ def list_missing_subtitles(no=None, epno=None, send_event=True, subtitles=None):
                     cutoff_language = {'language': cutoff_temp['language'],
                                        'forced': cutoff_temp['forced'],
                                        'hi': cutoff_temp['hi']}
-                    if cutoff_temp['audio_exclude'] == 'True' and \
-                            any(x['code2'] == cutoff_temp['language'] for x in
-                                get_audio_profile_languages(episode_subtitles.audio_language)):
+                    if cutoff_temp['audio_only_include'] == 'True' and not matches_audio(cutoff_temp):
+                        # We don't want subs in this language unless it matches
+                        # the audio. Don't use it to meet the cutoff.
+                        continue
+                    elif cutoff_temp['audio_exclude'] == 'True' and matches_audio(cutoff_temp):
+                        # The cutoff is met through one of the audio tracks.
                         cutoff_met = True
                     elif cutoff_language in actual_subtitles_list:
                         cutoff_met = True
@@ -269,35 +277,35 @@ def list_missing_subtitles(no=None, epno=None, send_event=True, subtitles=None):
             .values(missing_subtitles=missing_subtitles_text)
             .where(TableEpisodes.sonarrEpisodeId == episode_subtitles.sonarrEpisodeId))
 
-        if send_event:
-            event_stream(type='episode', payload=episode_subtitles.sonarrEpisodeId)
-            event_stream(type='episode-wanted', action='update', payload=episode_subtitles.sonarrEpisodeId)
-    if send_event:
-        event_stream(type='badges')
+        event_stream(type='episode', payload=episode_subtitles.sonarrEpisodeId)
+        event_stream(type='episode-wanted', action='update', payload=episode_subtitles.sonarrEpisodeId)
+    event_stream(type='badges')
 
 
-def series_full_scan_subtitles(use_cache=None):
+def series_full_scan_subtitles(job_id=None, use_cache=None):
+    if not job_id:
+        jobs_queue.add_job_from_function("Indexing all existing episodes subtitles", is_progress=True)
+        return
+
     if use_cache is None:
         use_cache = settings.sonarr.use_ffprobe_cache
 
     episodes = database.execute(
-        select(TableEpisodes.path))\
-        .all()
+        select(TableEpisodes.path, TableShows.title, TableEpisodes.title.label("episodeTitle"), TableEpisodes.season, TableEpisodes.episode)
+        .select_from(TableEpisodes)
+        .join(TableShows)
+    ).all()
 
-    count_episodes = len(episodes)
-    for i, episode in enumerate(episodes):
-        show_progress(id='episodes_disk_scan',
-                      header='Full disk scan...',
-                      name='Episodes subtitles',
-                      value=i,
-                      count=count_episodes)
+    jobs_queue.update_job_progress(job_id=job_id, progress_max=len(episodes), progress_message='Indexing')
+    for i, episode in enumerate(episodes, start=1):
+        jobs_queue.update_job_progress(
+            job_id=job_id, progress_value=i,
+            progress_message=f"{episode.title} - S{episode.season:02d}E{episode.episode:02d} - {episode.episodeTitle}")
         store_subtitles(episode.path, path_mappings.path_replace(episode.path), use_cache=use_cache)
 
-    show_progress(id='episodes_disk_scan',
-                  header='Full disk scan...',
-                  name='Episodes subtitles',
-                  value=count_episodes,
-                  count=count_episodes)
+    logging.info('BAZARR All existing episode subtitles indexed from disk.')
+
+    jobs_queue.update_job_name(job_id=job_id, new_job_name="Indexed all existing series subtitles")
 
     gc.collect()
 

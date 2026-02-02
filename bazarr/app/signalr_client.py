@@ -19,17 +19,19 @@ from sonarr.sync.series import update_series, update_one_series
 from radarr.sync.movies import update_movies, update_one_movie
 from sonarr.info import get_sonarr_info, url_sonarr
 from radarr.info import url_radarr
-from .database import TableShows, TableMovies, database, select
+from app.database import TableShows, TableMovies, database, select
+from app.jobs_queue import jobs_queue
 
 from .config import settings
 from .scheduler import scheduler
 from .get_args import args
 
-
 sonarr_queue = deque()
 radarr_queue = deque()
 
-last_event_data = None
+last_series_event_data = None
+last_episode_event_data = None
+last_movie_event_data = None
 
 
 class SonarrSignalrClientLegacy:
@@ -72,8 +74,8 @@ class SonarrSignalrClientLegacy:
                     self.connected = True
                     event_stream(type='badges')
                     logging.info('BAZARR SignalR client for Sonarr is connected and waiting for events.')
-                    if not args.dev:
-                        scheduler.add_job(update_series, kwargs={'send_event': True}, max_instances=1)
+                    if settings.sonarr.series_sync_on_live:
+                        scheduler.execute_job_now(taskid="update_series")
 
     def stop(self, log=True):
         try:
@@ -148,8 +150,8 @@ class SonarrSignalrClient:
         self.connected = True
         event_stream(type='badges')
         logging.info('BAZARR SignalR client for Sonarr is connected and waiting for events.')
-        if not args.dev:
-            scheduler.add_job(update_series, kwargs={'send_event': True}, max_instances=1)
+        if settings.sonarr.series_sync_on_live:
+            scheduler.execute_job_now(taskid="update_series")
 
     def on_reconnect_handler(self):
         self.connected = False
@@ -215,8 +217,8 @@ class RadarrSignalrClient:
         self.connected = True
         event_stream(type='badges')
         logging.info('BAZARR SignalR client for Radarr is connected and waiting for events.')
-        if not args.dev:
-            scheduler.add_job(update_movies, kwargs={'send_event': True}, max_instances=1)
+        if settings.radarr.movies_sync_on_live:
+            scheduler.execute_job_now(taskid="update_movies")
 
     def on_reconnect_handler(self):
         self.connected = False
@@ -267,7 +269,7 @@ def dispatcher(data):
                 else:
                     series_metadata = database.execute(
                         select(TableShows.title, TableShows.year)
-                        .where(TableShows.sonarrSeriesId == data['body']['resource']['seriesId']))\
+                        .where(TableShows.sonarrSeriesId == data['body']['resource']['seriesId'])) \
                         .first()
                     if series_metadata:
                         series_title = series_metadata.title
@@ -294,18 +296,19 @@ def dispatcher(data):
 
         if topic == 'series':
             logging.debug(f'Event received from Sonarr for series: {series_title} ({series_year})')
-            update_one_series(series_id=media_id, action=action)
             if episodesChanged:
-                # this will happen if a season monitored status is changed.
-                sync_episodes(series_id=media_id, send_event=True)
+                # this will happen if a season's monitored status is changed.
+                sync_episodes(series_id=media_id, defer_search=settings.sonarr.defer_search_signalr, is_signalr=True)
+            else:
+                update_one_series(series_id=media_id, action=action, is_signalr=True)
         elif topic == 'episode':
             logging.debug(f'Event received from Sonarr for episode: {series_title} ({series_year}) - '
                           f'S{season_number:0>2}E{episode_number:0>2} - {episode_title}')
-            sync_one_episode(episode_id=media_id, defer_search=settings.sonarr.defer_search_signalr)
+            sync_one_episode(episode_id=media_id, defer_search=settings.sonarr.defer_search_signalr, is_signalr=True)
         elif topic == 'movie':
             logging.debug(f'Event received from Radarr for movie: {movie_title} ({movie_year})')
-            update_one_movie(movie_id=media_id, action=action,
-                             defer_search=settings.radarr.defer_search_signalr)
+            update_one_movie(movie_id=media_id, action=action, defer_search=settings.radarr.defer_search_signalr,
+                             is_signalr=True)
     except Exception as e:
         logging.debug(f'BAZARR an exception occurred while parsing SignalR feed: {repr(e)}')
     finally:
@@ -313,28 +316,87 @@ def dispatcher(data):
         return
 
 
-def feed_queue(data):
-    # check if event is duplicate from the previous one
-    global last_event_data
-    if data == last_event_data:
-        return
-    else:
-        last_event_data = data
+def filter_nested_dict(data: dict) -> dict:
+    """
+    Filters out specific keys from a nested dictionary structure, including any
+    nested dictionaries or lists that may contain dictionaries.
 
-    # some sonarr version send event as a list of a single dict, we make it a dict
+    The function recursively processes the input dictionary to remove any key-value
+    pairs where the key matches the specified keys to exclude. For lists, it will
+    iterate through the items and apply the same filtering logic if the item is a
+    dictionary.
+
+    :param data: A dictionary that may contain nested dictionaries or lists. Values
+                 that are dictionaries will be recursively filtered, and lists
+                 within the dictionary will be traversed to check for and filter
+                 nested dictionaries within them.
+    :type data: dict
+    :return: A dictionary where specified keys are removed, including from any
+             nested dictionaries or dictionaries within lists.
+    :rtype: dict
+    """
+    keys_to_remove = ['statistics']
+
+    filtered_data = {}
+
+    for key, value in data.items():
+        if key not in keys_to_remove:
+            if isinstance(value, dict):
+                # Recursively filter nested dictionaries
+                filtered_data[key] = filter_nested_dict(value)
+            elif isinstance(value, list):
+                # Handle lists that might contain dictionaries
+                filtered_data[key] = [
+                    filter_nested_dict(item) if isinstance(item, dict) else item
+                    for item in value
+                ]
+            else:
+                # Keep the value as is
+                filtered_data[key] = value
+
+    return filtered_data
+
+
+def feed_queue(data):
+    # some sonarr version sends events as a list of a single dict, we make it a dict
     if isinstance(data, list) and len(data):
         data = data[0]
 
-    # if data is a dict and contain an event for series, episode or movie, we add it to the event queue
-    if isinstance(data, dict) and 'name' in data:
-        if data['name'] in ['series', 'episode']:
-            sonarr_queue.append(data)
+    if isinstance(data, dict) and 'name' in data and data['name'] in ['series', 'episode', 'movie']:
+        # filter out some keys to reduce the size of the event data dictionary and prevent similar events from being
+        # added to the queue
+        data = filter_nested_dict(data)
+
+        # check if event is duplicate from the previous one
+        if data['name'] == 'series':
+            global last_series_event_data
+            if data == last_series_event_data:
+                return
+            else:
+                last_series_event_data = data
+        elif data['name'] == 'episode':
+            global last_episode_event_data
+            if data == last_episode_event_data:
+                return
+            else:
+                last_episode_event_data = data
         elif data['name'] == 'movie':
-            radarr_queue.append(data)
+            global last_movie_event_data
+            if data == last_movie_event_data:
+                return
+            else:
+                last_movie_event_data = data
+
+        # if data is a dict and contain an event for series, episode or movie, we add it to the event queue
+        if isinstance(data, dict) and 'name' in data:
+            if data['name'] in ['series', 'episode']:
+                sonarr_queue.append(data)
+            elif data['name'] == 'movie':
+                radarr_queue.append(data)
 
 
 def consume_queue(queue):
-    # get events data from queue one at a time and dispatch it
+    # get events data from queues one at a time and dispatch it
     while True:
         try:
             data = queue.popleft()
@@ -347,7 +409,7 @@ def consume_queue(queue):
         sleep(0.1)
 
 
-# start both queue consuming threads
+# start both queues consuming threads
 sonarr_queue_thread = threading.Thread(target=consume_queue, args=(sonarr_queue,))
 sonarr_queue_thread.daemon = True
 sonarr_queue_thread.start()

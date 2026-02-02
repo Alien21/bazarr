@@ -10,6 +10,8 @@ import time
 from bazarr.app.get_args import args
 from bazarr.literals import EXIT_PYTHON_UPGRADE_NEEDED, EXIT_NORMAL, FILE_RESTART, FILE_STOP, ENV_RESTARTFILE, ENV_STOPFILE, EXIT_INTERRUPT
 
+# always flush print statements
+sys.stdout.reconfigure(line_buffering=True)
 
 def exit_program(status_code):
     print(f'Bazarr exited with status code {status_code}.')
@@ -25,8 +27,8 @@ def check_python_version():
         print("Python " + minimum_py3_str + " or greater required. "
               "Current version is " + platform.python_version() + ". Please upgrade Python.")
         exit_program(EXIT_PYTHON_UPGRADE_NEEDED)
-    elif int(python_version[0]) == 3 and int(python_version[1]) > 12:
-        print("Python version greater than 3.12.x is unsupported. Current version is " + platform.python_version() +
+    elif int(python_version[0]) == 3 and int(python_version[1]) > 13:
+        print("Python version greater than 3.13.x is unsupported. Current version is " + platform.python_version() +
               ". Keep in mind that even if it works, you're on your own.")
     elif (int(python_version[0]) == minimum_py3_tuple[0] and int(python_version[1]) < minimum_py3_tuple[1]) or \
             (int(python_version[0]) != minimum_py3_tuple[0]):
@@ -63,8 +65,11 @@ def start_bazarr():
 
 
 def terminate_child():
+    global child_process
     print(f"Terminating child process with PID {child_process.pid}")
-    child_process.terminate()
+    if child_process.poll() is None:   # Process is still running
+        child_process.terminate()      # Send termination signal
+    child_process.wait()               # Ensure it exits
 
 
 def get_stop_status_code(input_file):
@@ -132,7 +137,7 @@ def interrupt_handler(signum, frame):
         interrupted = True
         print('Handling keyboard interrupt...')
     else:
-        if not is_process_running(child_process):
+        if not is_process_running(child_process.pid):
             # this will be caught by the main loop below
             raise SystemExit(EXIT_INTERRUPT)
 

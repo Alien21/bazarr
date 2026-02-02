@@ -24,6 +24,7 @@ import {
   hiExtensionOptions,
   providerOptions,
   syncMaxOffsetSecondsOptions,
+  translatorOption,
 } from "./options";
 
 interface CommandOption {
@@ -324,6 +325,12 @@ const SettingsSubtitlesView: FunctionComponent = () => {
           color etc.
         </Message>
         <Check
+          label="Remove Emoji"
+          settingOptions={{ onLoaded: SubzeroModification("emoji") }}
+          settingKey="subzero-emoji"
+        ></Check>
+        <Message>Removes emoji characters from subtitles.</Message>
+        <Check
           label="OCR Fixes"
           settingOptions={{ onLoaded: SubzeroModification("OCR_fixes") }}
           settingKey="subzero-OCR_fixes"
@@ -520,6 +527,57 @@ const SettingsSubtitlesView: FunctionComponent = () => {
             <tbody>{commandOptionElements}</tbody>
           </Table>
         </CollapseBox>
+      </Section>
+      <Section header="Translating">
+        <Slider
+          label="Score for Translated Episode and Movie Subtitles"
+          settingKey="settings-translator-default_score"
+        ></Slider>
+        <Selector
+          label="Translator"
+          clearable
+          options={translatorOption}
+          placeholder="Default translator"
+          settingKey="settings-translator-translator_type"
+        ></Selector>
+        <CollapseBox
+          settingKey="settings-translator-translator_type"
+          on={(val) => val === "gemini"}
+        >
+          <Text
+            label="Gemini model"
+            settingKey="settings-translator-gemini_model"
+          />
+          <Text
+            label="Gemini API key"
+            settingKey="settings-translator-gemini_key"
+          ></Text>
+          <Message>
+            You can generate it here: https://aistudio.google.com/apikey
+          </Message>
+        </CollapseBox>
+        <CollapseBox
+          settingKey="settings-translator-translator_type"
+          on={(val) => val === "lingarr"}
+        >
+          <Text
+            label="Lingarr endpoint"
+            settingKey="settings-translator-lingarr_url"
+          />
+          <Message>Base URL of Lingarr (e.g., http://localhost:9876)</Message>
+          <Text
+            label="Lingarr API Key (optional)"
+            settingKey="settings-translator-lingarr_token"
+          />
+          <Message>
+            Optional API key for authentication. Leave empty if your Lingarr
+            instance doesn't require authentication.
+          </Message>
+        </CollapseBox>
+        <Check
+          label="Add translation info at the beginning"
+          settingKey="settings-translator-translator_info"
+        ></Check>
       </Section>
     </Layout>
   );

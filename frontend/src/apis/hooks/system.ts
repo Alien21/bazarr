@@ -47,6 +47,14 @@ export function useSystemSettings() {
   });
 }
 
+export function useSystemJobs() {
+  return useQuery({
+    queryKey: [QueryKeys.System, QueryKeys.Jobs],
+    queryFn: () => api.system.jobs(),
+    staleTime: Infinity,
+  });
+}
+
 export function useSettingsMutation() {
   const client = useQueryClient();
   return useMutation({
@@ -76,6 +84,11 @@ export function useSettingsMutation() {
 
       void client.invalidateQueries({
         queryKey: [QueryKeys.Badges],
+      });
+
+      // Invalidate Plex libraries when settings change (e.g., server configuration)
+      void client.invalidateQueries({
+        queryKey: [QueryKeys.Plex, "libraries"],
       });
     },
   });
@@ -304,4 +317,10 @@ export function useSystem() {
       shutdown,
     ],
   );
+}
+
+export function useSystemWebhookTestMutation() {
+  return useMutation({
+    mutationFn: () => api.system.testWebhook(),
+  });
 }

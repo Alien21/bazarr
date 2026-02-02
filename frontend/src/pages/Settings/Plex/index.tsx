@@ -1,62 +1,99 @@
-import { FunctionComponent } from "react";
+import { Link } from "react-router";
+import { Box, Code, Paper, Text } from "@mantine/core";
 import {
   Check,
   CollapseBox,
   Layout,
-  Message,
-  Number,
   Section,
-  Text,
 } from "@/pages/Settings/components";
 import { plexEnabledKey } from "@/pages/Settings/keys";
+import AutopulseSelector from "./AutopulseSelector";
+import LibrarySelector from "./LibrarySelector";
+import PlexSettings from "./PlexSettings";
+import WebhookSelector from "./WebhookSelector";
 
-const SettingsPlexView: FunctionComponent = () => {
+const SettingsPlexView = () => {
   return (
     <Layout name="Interface">
-      <Section header="Use Plex operations">
-        <Check label="Enabled" settingKey={plexEnabledKey}></Check>
+      <Section header="Use Plex Media Server">
+        <Check label="Enabled" settingKey={plexEnabledKey} />
       </Section>
+
       <CollapseBox settingKey={plexEnabledKey}>
-        <Section header="Host">
-          <Text label="Address" settingKey="settings-plex-ip"></Text>
-          <Number
-            label="Port"
-            settingKey="settings-plex-port"
-            defaultValue={32400}
-          ></Number>
-          <Message>Hostname or IPv4 Address</Message>
-          <Text label="API Token" settingKey="settings-plex-apikey"></Text>
-          <Check label="SSL" settingKey="settings-plex-ssl"></Check>
-        </Section>
-        <Section header="Movie library">
-          <Text
-            label="Name of the library"
+        <Paper p="xl" radius="md">
+          <Box>
+            <PlexSettings />
+          </Box>
+        </Paper>
+
+        {/* Plex Library Configuration */}
+        <Section header="Movie Library">
+          <LibrarySelector
+            label="Library Name"
             settingKey="settings-plex-movie_library"
-          ></Text>
+            settingKeyIds="settings-plex-movie_library_ids"
+            libraryType="movie"
+            description="Select your movie library from Plex"
+          />
           <Check
-            label="Mark the movie as recently added after downloading subtitles"
+            label="Mark movies as recently added after downloading subtitles"
             settingKey="settings-plex-set_movie_added"
-          ></Check>
+          />
           <Check
-            label="Scan library for new files after downloading subtitles"
+            label="Refresh movie metadata after downloading subtitles (recommended)"
             settingKey="settings-plex-update_movie_library"
-          ></Check>
-          <Message>Can be helpful for remote media files</Message>
+          />
         </Section>
-        <Section header="Series library">
-          <Text
-            label="Name of the library"
+
+        <Section header="Series Library">
+          <LibrarySelector
+            label="Library Name"
             settingKey="settings-plex-series_library"
-          ></Text>
+            settingKeyIds="settings-plex-series_library_ids"
+            libraryType="show"
+            description="Select your TV show library from Plex"
+          />
           <Check
-            label="Mark the episode as recently added after downloading subtitles"
+            label="Mark episodes as recently added after downloading subtitles"
             settingKey="settings-plex-set_episode_added"
-          ></Check>
+          />
           <Check
-            label="Scan library for new files after downloading subtitles"
+            label="Refresh series metadata after downloading subtitles (recommended)"
             settingKey="settings-plex-update_series_library"
-          ></Check>
-          <Message>Can be helpful for remote media files</Message>
+          />
+        </Section>
+
+        <Section header="Automation">
+          <WebhookSelector
+            label="Webhooks"
+            description="Create a Bazarr webhook in Plex to automatically search for subtitles when content starts playing. Manage and remove existing webhooks for convenience."
+          />
+          <AutopulseSelector
+            label="Autopulse Configuration"
+            description={
+              <>
+                Generate a ready-to-use Autopulse configuration tailored to your
+                Plex server. Includes optimized settings, OAuth authentication,
+                and automatic path rewrite detection. Deploy as{" "}
+                <Code>config.toml</Code> to your Autopulse data directory for a
+                new setup, or copy specific sections to extend your existing
+                configuration.
+                <br />
+                <br />
+                To enable the webhook trigger, see the{" "}
+                <Text
+                  component={Link}
+                  to="/settings/general"
+                  fw={500}
+                  c="blue"
+                  td="none"
+                >
+                  Generic Webhook Configuration
+                </Text>
+                .
+              </>
+            }
+          />
         </Section>
       </CollapseBox>
     </Layout>

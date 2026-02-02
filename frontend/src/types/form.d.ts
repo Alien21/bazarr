@@ -85,4 +85,12 @@ declare namespace FormType {
   interface AddAnnouncementsDismiss {
     hash: number;
   }
+
+  interface PlexSelectServer {
+    machineIdentifier: string;
+    name: string;
+    uri: string;
+    local: boolean;
+    connections?: string[];
+  }
 }

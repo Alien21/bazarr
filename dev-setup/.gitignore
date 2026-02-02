@@ -1,0 +1,8 @@
+# Development data directories
+bazarr/
+autopulse/
+data/
+
+# Docker volumes and temporary files
+.env
+*.log

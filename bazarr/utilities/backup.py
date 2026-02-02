@@ -5,12 +5,13 @@ import sqlite3
 import shutil
 import logging
 
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from zipfile import ZipFile, BadZipFile, ZIP_DEFLATED
 from glob import glob
 
 from app.get_args import args
 from app.config import settings
+from app.jobs_queue import jobs_queue
 from utilities.central import restart_bazarr
 
 
@@ -45,7 +46,11 @@ def get_backup_files(fullpath=True):
         } for x in file_list]
 
 
-def backup_to_zip():
+def backup_to_zip(job_id=None):
+    if not job_id:
+        jobs_queue.add_job_from_function("Backing up Database and Configuration File", is_progress=False)
+        return
+
     now = datetime.now()
     database_backup_file = None
     now_string = now.strftime("%Y.%m.%d_%H.%M.%S")
@@ -85,6 +90,8 @@ def backup_to_zip():
         else:
             logging.debug('Database file is not included in backup. See previous exception')
         backupZip.write(config_file, 'config.yaml')
+
+    jobs_queue.update_job_name(job_id=job_id, new_job_name="Backed up Database and Configuration File")
 
 
 def restore_from_backup():
@@ -133,6 +140,9 @@ def restore_from_backup():
                 logging.exception(f'Unable to delete {dest_database_path}')
 
         logging.info('Backup restored successfully. Bazarr will restart.')
+        from app.server import webserver
+        if webserver is not None:
+            webserver.close_all()
         restart_bazarr()
     elif os.path.isfile(restore_config_path) or os.path.isfile(restore_database_path):
         logging.debug('Cannot restore a partial backup. You must have both config and database.')
@@ -172,8 +182,10 @@ def prepare_restore(filename):
 
     if success:
         logging.debug('time to restart')
-        from app.server import webserver
-        webserver.restart()
+        from app.server import webserver        
+        if webserver is not None:
+            webserver.close_all()
+        restart_bazarr()
 
     return success
 
@@ -190,7 +202,8 @@ def backup_rotation():
 
     logging.debug(f'Cleaning up backup files older than {backup_retention} days')
     for file in backup_files:
-        if datetime.fromtimestamp(os.path.getmtime(file)) + timedelta(days=int(backup_retention)) < datetime.utcnow():
+        if (datetime.fromtimestamp(os.path.getmtime(file), tz=timezone.utc) + timedelta(days=int(backup_retention)) <
+                datetime.now(tz=timezone.utc)):
             logging.debug(f'Deleting old backup file {file}')
             try:
                 os.remove(file)
