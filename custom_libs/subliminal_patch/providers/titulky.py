@@ -5,7 +5,6 @@ import logging
 import re
 import zipfile
 import time
-from random import randint
 from urllib.parse import urlparse, parse_qs, quote
 
 import rarfile
@@ -22,6 +21,7 @@ from subliminal.video import Episode, Movie
 
 from subliminal_patch.providers import Provider
 from subliminal_patch.providers.mixins import ProviderSubtitleArchiveMixin
+from subliminal_patch.score import framerate_equal
 
 from subliminal_patch.subtitle import Subtitle, guess_matches
 
@@ -29,8 +29,6 @@ from subliminal_patch.pitcher import pitchers, load_verification, store_verifica
 
 from dogpile.cache.api import NO_VALUE
 from subzero.language import Language
-
-from .utils import FIRST_THOUSAND_OR_SO_USER_AGENTS as AGENT_LIST
 
 logger = logging.getLogger(__name__)
 
@@ -152,36 +150,32 @@ class TitulkyProvider(Provider, ProviderSubtitleArchiveMixin):
 
         self.premium_session = None
         self.normal_session = None
+        self._force_relogin_on_next_request = False
 
     def initialize(self):
         self.premium_session = Session()
         self.normal_session = Session()
 
-        # Set headers
-        cached_user_agent = cache.get('titulky_user_agent')
-        if cached_user_agent == NO_VALUE:
-            new_user_agent = AGENT_LIST[randint(0, len(AGENT_LIST) - 1)]
-            cache.set('titulky_user_agent', new_user_agent)
-            self.premium_session.headers['User-Agent'] = new_user_agent
-            self.normal_session.headers['User-Agent'] = new_user_agent
-        else:
-            self.premium_session.headers['User-Agent'] = cached_user_agent
-            self.normal_session.headers['User-Agent'] = cached_user_agent
+        firefox_user_agent = (
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:134.0) "
+            "Gecko/20100101 Firefox/134.0"
+        )
 
-        self.premium_session.headers['Accept'] = 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8'
-        self.normal_session.headers['Accept'] = 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8'
-        self.premium_session.headers['Accept-Language'] = 'cz,sk,en;q=0.5'
-        self.normal_session.headers['Accept-Language'] = 'cz,sk,en;q=0.5'
-        self.premium_session.headers['Accept-Encoding'] = 'gzip, deflate'
-        self.normal_session.headers['Accept-Encoding'] = 'gzip, deflate'
-        self.premium_session.headers['DNT'] = '1'
-        self.normal_session.headers['DNT'] = '1'
-        self.premium_session.headers['Connection'] = 'keep-alive'
-        self.normal_session.headers['Connection'] = 'keep-alive'
-        self.premium_session.headers['Upgrade-Insecure-Requests'] = '1'
-        self.normal_session.headers['Upgrade-Insecure-Requests'] = '1'
-        self.premium_session.headers['Cache-Control'] = 'max-age=0'
-        self.normal_session.headers['Cache-Control'] = 'max-age=0'
+        for session in (self.premium_session, self.normal_session):
+            session.headers.update({
+                'User-Agent': firefox_user_agent,
+                'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+                'Accept-Language': 'cs,sk;q=0.8,en-US;q=0.5,en;q=0.3',
+                'Accept-Encoding': 'gzip, deflate, br, zstd',
+                'DNT': '1',
+                'Connection': 'keep-alive',
+                'Upgrade-Insecure-Requests': '1',
+                'Sec-Fetch-Dest': 'document',
+                'Sec-Fetch-Mode': 'navigate',
+                'Sec-Fetch-Site': 'none',
+                'Sec-Fetch-User': '?1',
+                'Priority': 'u=0, i',
+            })
 
         self.login()
 
@@ -271,6 +265,33 @@ class TitulkyProvider(Provider, ProviderSubtitleArchiveMixin):
         else:
             raise AuthenticationError("Logout failed.")
 
+    def _invalidate_cached_cookies_after_429(self, request_url):
+        logger.info(f"Titulky.com: Received HTTP 429 for {request_url}. Clearing cached cookies and forcing re-login on next request.")
+
+        try:
+            cache.delete('premium_titulky_cookiejar')
+        except Exception as exc:
+            logger.debug(f"Titulky.com: Failed to delete premium cookie cache: {exc}")
+
+        try:
+            cache.delete('normal_titulky_cookiejar')
+        except Exception as exc:
+            logger.debug(f"Titulky.com: Failed to delete normal cookie cache: {exc}")
+
+        try:
+            if self.premium_session is not None:
+                self.premium_session.cookies.clear()
+        except Exception as exc:
+            logger.debug(f"Titulky.com: Failed to clear premium session cookies: {exc}")
+
+        try:
+            if self.normal_session is not None:
+                self.normal_session.cookies.clear()
+        except Exception as exc:
+            logger.debug(f"Titulky.com: Failed to clear normal session cookies: {exc}")
+
+        self._force_relogin_on_next_request = True
+
     # GET request a page. This functions acts as a requests.session.get proxy handling expired cached cookies
     # and subsequent relogging and sending the original request again. If all went well, returns the response.
     def get_request(self, url, ref=premium_server_url, allow_redirects=False, _recursion=0):
@@ -280,6 +301,11 @@ class TitulkyProvider(Provider, ProviderSubtitleArchiveMixin):
             raise AuthenticationError("Got into a loop and couldn't get authenticated!")
 
         logger.debug(f"Titulky.com: Fetching url: {url}")
+
+        if getattr(self, '_force_relogin_on_next_request', False):
+            logger.info("Titulky.com: Forcing re-login because cached cookies were invalidated after HTTP 429.")
+            self._force_relogin_on_next_request = False
+            self.login(True)
 
         if url.find(self.premium_server_url) != 0:
             res = self.normal_session.get(
@@ -302,6 +328,25 @@ class TitulkyProvider(Provider, ProviderSubtitleArchiveMixin):
                 logger.info(f"Titulky.com: Login premium cookies expired.")
                 self.login(True)
                 return self.get_request(url, ref=ref, _recursion=(_recursion + 1))
+
+        if res.status_code == 429:
+            self._invalidate_cached_cookies_after_429(url)
+            return res
+
+        if res.status_code == 200 and res.text:
+            response_text_lower = res.text.lower()
+            is_window_location_redirect = "window.location" in response_text_lower and (
+                "assign(" in response_text_lower
+                or "replace(" in response_text_lower
+                or "window.location=" in response_text_lower
+            )
+            is_login_message_present = ("přihlaš" in response_text_lower) or ("prihlas" in response_text_lower)
+            is_reload_page_present = "reload.php" in response_text_lower
+
+            if is_window_location_redirect and is_login_message_present and is_reload_page_present:
+                logger.info("Titulky.com: Login premium cookies expired (JS redirect in body).")
+                self.login(True)
+                return self.get_request(url, ref=ref, allow_redirects=allow_redirects, _recursion=(_recursion + 1))
 
         return res
 
