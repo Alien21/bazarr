@@ -5,10 +5,11 @@ import operator
 from flask_restx import Resource, Namespace, reqparse, fields, marshal
 from functools import reduce
 
-from app.database import get_exclusion_clause, TableMovies, database, select, func
+from app.database import get_exclusion_clause, TableMovies, TableMoviesRootfolder, database, select, func
 from api.swaggerui import subtitles_language_model
+from utilities.path_mappings import path_mappings
 
-from api.utils import authenticate, postprocess
+from api.utils import authenticate, get_library_name_from_path, postprocess
 
 
 api_ns_movies_wanted = Namespace('Movies Wanted', description='List movies wanted subtitles')
@@ -30,6 +31,8 @@ class MoviesWanted(Resource):
         'radarrId': fields.Integer(),
         'sceneName': fields.String(),
         'tags': fields.List(fields.String),
+        'path': fields.String(),
+        'pathShort': fields.String(),
     })
 
     get_response_model = api_ns_movies_wanted.model('MovieWantedGetResponse', {
@@ -62,7 +65,8 @@ class MoviesWanted(Resource):
                       TableMovies.missing_subtitles,
                       TableMovies.radarrId,
                       TableMovies.sceneName,
-                      TableMovies.tags) \
+                      TableMovies.tags,
+                      TableMovies.path) \
             .where(wanted_condition)
         if length > 0:
             stmt = stmt.order_by(TableMovies.radarrId.desc()).limit(length).offset(start)
@@ -73,7 +77,22 @@ class MoviesWanted(Resource):
             'radarrId': x.radarrId,
             'sceneName': x.sceneName,
             'tags': x.tags,
+            'path': x.path,
         }) for x in database.execute(stmt).all()]
+
+        root_paths = [
+            x.path for x in database.execute(select(TableMoviesRootfolder.path)).all()
+        ]
+
+        for item in results:
+            item['pathShort'] = get_library_name_from_path(
+                item.get('path'),
+                root_paths,
+                path_mappings.path_replace_movie,
+            )
+
+            if not 'sceneName' in item or not item['sceneName']:
+                item['sceneName'] = "No release name"
 
         count = database.execute(
             select(func.count())

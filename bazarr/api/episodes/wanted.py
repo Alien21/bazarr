@@ -5,10 +5,11 @@ import operator
 from flask_restx import Resource, Namespace, reqparse, fields, marshal
 from functools import reduce
 
-from app.database import get_exclusion_clause, TableEpisodes, TableShows, database, select, func
+from app.database import get_exclusion_clause, TableEpisodes, TableShows, TableShowsRootfolder, database, select, func
 from api.swaggerui import subtitles_language_model
+from utilities.path_mappings import path_mappings
 
-from ..utils import authenticate, postprocess
+from ..utils import authenticate, get_library_name_from_path, postprocess
 
 api_ns_episodes_wanted = Namespace('Episodes Wanted', description='List episodes wanted subtitles')
 
@@ -32,6 +33,8 @@ class EpisodesWanted(Resource):
         'sonarrEpisodeId': fields.Integer(),
         'sceneName': fields.String(),
         'tags': fields.List(fields.String),
+        'path': fields.String(),
+        'pathShort': fields.String(),
         'seriesType': fields.String(),
     })
 
@@ -87,20 +90,20 @@ class EpisodesWanted(Resource):
             'sonarrEpisodeId': x.sonarrEpisodeId,
             'sceneName': x.sceneName,
             'tags': x.tags,
+            'path': x.path,
             'seriesType': x.seriesType,
         }) for x in database.execute(stmt).all()]
 
+        root_paths = [
+            x.path for x in database.execute(select(TableShowsRootfolder.path)).all()
+        ]
+
         for item in results:
-            if 'path' in item and item['path']:
-                if item['path'].find("/mnt/truecrypt/archive/") >= 0:
-                    item['path'] = item['path'].replace("/mnt/truecrypt/archive/", "")
-                    item['path'] = item['path'][0: item['path'].find("/")]
-                elif item['path'].find("Z:\\") >= 0:
-                    item['path'] = item['path'].replace("Z:\\", "")
-                    item['path'] = item['path'][0: item['path'].find("\\")]
-                elif item['path'].find("Y:\\") >= 0:
-                    item['path'] = item['path'].replace("Y:\\", "")
-                    item['path'] = item['path'][0: item['path'].find("\\")]
+            item['pathShort'] = get_library_name_from_path(
+                item.get('path'),
+                root_paths,
+                path_mappings.path_replace,
+            )
 
             if not 'sceneName' in item or not item['sceneName']:
                 item['sceneName'] = "No release name"

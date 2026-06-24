@@ -1,7 +1,7 @@
 import { FunctionComponent, useMemo } from "react";
 import { Link } from "react-router";
 import { Anchor, Badge, Group } from "@mantine/core";
-import { faSearch } from "@fortawesome/free-solid-svg-icons";
+import { faFileLines, faSearch } from "@fortawesome/free-solid-svg-icons";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import { ColumnDef } from "@tanstack/react-table";
 import {
@@ -10,6 +10,7 @@ import {
   useMovieWantedPagination,
 } from "@/apis/hooks";
 import Language from "@/components/bazarr/Language";
+import TextPopover from "@/components/TextPopover";
 import WantedView from "@/pages/views/WantedView";
 import { BuildKey } from "@/utilities";
 
@@ -31,6 +32,36 @@ const WantedMoviesView: FunctionComponent = () => {
             <Anchor component={Link} to={target}>
               {title}
             </Anchor>
+          );
+        },
+      },
+      {
+        header: "Path",
+        accessorKey: "path",
+        cell: ({
+          row: {
+            original: { path, pathShort },
+          },
+        }) => {
+          return (
+            <TextPopover text={path}>
+              <span>{pathShort}</span>
+            </TextPopover>
+          );
+        },
+      },
+      {
+        header: "Release",
+        accessorKey: "sceneName",
+        cell: ({
+          row: {
+            original: { sceneName },
+          },
+        }) => {
+          return (
+            <TextPopover text={sceneName}>
+              <FontAwesomeIcon size="2x" icon={faFileLines}></FontAwesomeIcon>
+            </TextPopover>
           );
         },
       },

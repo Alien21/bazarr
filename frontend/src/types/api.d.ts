@@ -186,10 +186,11 @@ declare namespace Item {
 declare namespace Wanted {
   type Base = MonitoredType &
     TagType &
+    PathType &
     SceneNameType & {
       hearing_impaired: boolean;
       missing_subtitles: Subtitle[];
-      path: string;
+      pathShort: string;
     };
 
   type Episode = Base &

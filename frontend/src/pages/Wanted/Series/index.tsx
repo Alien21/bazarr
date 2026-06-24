@@ -48,12 +48,12 @@ const WantedSeriesView: FunctionComponent = () => {
         accessorKey: "path",
         cell: ({
           row: {
-            original: { path },
+            original: { path, pathShort },
           },
         }) => {
           return (
             <TextPopover text={path}>
-              <FontAwesomeIcon size="2x" icon={faFileLines}></FontAwesomeIcon>
+              <span>{pathShort}</span>
             </TextPopover>
           );
         },

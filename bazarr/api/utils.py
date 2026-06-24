@@ -1,6 +1,7 @@
 # coding=utf-8
 
 import ast
+import re
 
 from functools import wraps
 from flask import request, abort
@@ -14,6 +15,45 @@ from utilities.path_mappings import path_mappings
 None_Keys = ['null', 'undefined', '', None]
 
 False_Keys = ['False', 'false', '0']
+
+
+def _normalize_library_path(path):
+    return re.sub(r'/+', '/', str(path).strip().replace('\\', '/').rstrip('/')).casefold()
+
+
+def _library_name_from_root_path(root_path):
+    path = str(root_path).strip().rstrip('/\\')
+    parts = [part for part in re.split(r'[\\/]+', path) if part]
+    return parts[-1] if parts else path
+
+
+def _library_name_from_media_path(path):
+    path = str(path).strip().rstrip('/\\')
+    parts = [part for part in re.split(r'[\\/]+', path) if part]
+    return parts[-2] if len(parts) > 1 else path
+
+
+def get_library_name_from_path(path, root_paths, path_replace=None):
+    if not path:
+        return ''
+
+    path_normalized = _normalize_library_path(path)
+    matching_root_paths = []
+
+    for root_path in root_paths:
+        if not root_path:
+            continue
+
+        mapped_root_path = path_replace(root_path) if path_replace else root_path
+        root_normalized = _normalize_library_path(mapped_root_path)
+        if path_normalized == root_normalized or path_normalized.startswith(f"{root_normalized}/"):
+            matching_root_paths.append(mapped_root_path)
+
+    if not matching_root_paths:
+        return _library_name_from_media_path(path)
+
+    matching_root_path = max(matching_root_paths, key=lambda value: len(_normalize_library_path(value)))
+    return _library_name_from_root_path(matching_root_path)
 
 
 def authenticate(actual_method):
