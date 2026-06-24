@@ -689,7 +689,12 @@ class PlexLibraries(Resource):
                         section_key = section.get('key')
                         count_response = requests.get(
                             f"{successful_server_url}/library/sections/{section_key}/all",
-                            headers={'X-Plex-Token': decrypted_token, 'Accept': 'application/json'},
+                            headers={
+                                'X-Plex-Token': decrypted_token,
+                                'Accept': 'application/json',
+                                'X-Plex-Container-Start': '0',
+                                'X-Plex-Container-Size': '1',
+                            },
                             timeout=5,
                             verify=False
                         )
@@ -699,8 +704,8 @@ class PlexLibraries(Resource):
                             count_data = count_response.json()
                             if 'MediaContainer' in count_data:
                                 container = count_data['MediaContainer']
-                                # The 'size' field contains the number of items in the library
-                                actual_count = int(container.get('size', len(container.get('Metadata', []))))
+                                # Plex returns the total library size even when we request a single item.
+                                actual_count = int(container.get('totalSize', container.get('size', 0)))
                         
                         logger.debug(f"Library '{section.get('title')}' has {actual_count} items")
                         
