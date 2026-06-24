@@ -555,6 +555,32 @@ export const ProviderList: Readonly<ProviderInfo[]> = [
     ],
   },
   {
+    key: "titulkyalien21",
+    name: "Titulky Alien21",
+    description:
+      "CZ/SK Subtitles Provider through the Alien21 Titulky endpoint. Available only with VIP.",
+    inputs: [
+      {
+        type: "text",
+        key: "username",
+      },
+      {
+        type: "password",
+        key: "password",
+      },
+      {
+        type: "switch",
+        key: "approved_only",
+        name: "Skip unapproved subtitles",
+      },
+      {
+        type: "switch",
+        key: "skip_wrong_fps",
+        name: "Skip subtitles with mismatched fps to video's",
+      },
+    ],
+  },
+  {
     key: "turkcealtyaziorg",
     name: "Turkcealtyazi.org",
     description: "Turkish Subtitles Provider",

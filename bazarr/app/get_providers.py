@@ -98,6 +98,11 @@ def provider_throttle_map():
                 titulky_limit_reset_timedelta(),
                 f"{titulky_limit_reset_timedelta().seconds // 3600 + 1} hours")
         },
+        "titulkyalien21": {
+            DownloadLimitExceeded: (
+                titulky_limit_reset_timedelta(),
+                f"{titulky_limit_reset_timedelta().seconds // 3600 + 1} hours")
+        },
         "legendasdivx": {
             TooManyRequests: (datetime.timedelta(hours=3), "3 hours"),
             DownloadLimitExceeded: (
@@ -283,6 +288,12 @@ def get_providers_auth():
             'password': settings.titulky.password,
             'approved_only': settings.titulky.approved_only,
             'skip_wrong_fps': settings.titulky.skip_wrong_fps,
+        },
+        'titulkyalien21': {
+            'username': settings.titulkyalien21.username,
+            'password': settings.titulkyalien21.password,
+            'approved_only': settings.titulkyalien21.approved_only,
+            'skip_wrong_fps': settings.titulkyalien21.skip_wrong_fps,
         },
         'titlovi': {
             'username': settings.titlovi.username,

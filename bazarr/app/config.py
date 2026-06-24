@@ -388,6 +388,12 @@ validators = [
     Validator('titulky.approved_only', must_exist=True, default=False, is_type_of=bool),
     Validator('titulky.skip_wrong_fps', must_exist=True, default=False, is_type_of=bool),
 
+    # titulkyalien21 section
+    Validator('titulkyalien21.username', must_exist=True, default='', is_type_of=str, cast=str),
+    Validator('titulkyalien21.password', must_exist=True, default='', is_type_of=str, cast=str),
+    Validator('titulkyalien21.approved_only', must_exist=True, default=False, is_type_of=bool),
+    Validator('titulkyalien21.skip_wrong_fps', must_exist=True, default=False, is_type_of=bool),
+
     # embeddedsubtitles section
     Validator('embeddedsubtitles.included_codecs', must_exist=True, default=[], is_type_of=list),
     Validator('embeddedsubtitles.hi_fallback', must_exist=True, default=False, is_type_of=bool),
