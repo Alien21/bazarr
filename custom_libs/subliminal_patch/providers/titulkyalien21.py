@@ -5,7 +5,7 @@ import logging
 import re
 import zipfile
 import time
-from urllib.parse import urlparse, parse_qs
+from urllib.parse import urlparse, parse_qs, urlunparse
 
 import rarfile
 from guessit import guessit
@@ -363,6 +363,31 @@ class TitulkyAlien21Provider(Provider, ProviderSubtitleArchiveMixin):
             return self.normal_origin_url + ref[len(self.normal_server_url):]
 
         return ref
+
+    def _proxied_download_url(self, downlink):
+        downlink = downlink.strip()
+        if downlink.startswith('//'):
+            downlink = 'https:' + downlink
+        elif not re.match(r'(?i)^https?://', downlink):
+            downlink = 'https://' + downlink.lstrip('/')
+
+        parsed_downlink = urlparse(downlink)
+        origin_to_proxy = {
+            urlparse(self.normal_origin_url).hostname.lower(): self.normal_server_url,
+            'titulky.com': self.normal_server_url,
+            urlparse(self.premium_origin_url).hostname.lower(): self.premium_server_url,
+        }
+        proxy_url = origin_to_proxy.get((parsed_downlink.hostname or '').lower())
+
+        if proxy_url:
+            parsed_proxy = urlparse(proxy_url)
+            downlink = urlunparse(parsed_downlink._replace(
+                scheme=parsed_proxy.scheme,
+                netloc=parsed_proxy.netloc,
+            ))
+            logger.debug("TitulkyAlien21: Rewriting final download url through fakeproxy: %s", downlink)
+
+        return downlink
 
     def get_request(self, url, ref=premium_server_url, allow_redirects=False, _recursion=0):
         # That's deep... recursion... Stop. We don't have infinite memmory. And don't want to
@@ -746,7 +771,7 @@ class TitulkyAlien21Provider(Provider, ProviderSubtitleArchiveMixin):
                 logger.error("TitulkyAlien21: Cannot find downlink (%s) !!!", subtitle.download_link)
                 return
 
-            down_url = "https://" + down_url_link.contents[0].strip()
+            down_url = self._proxied_download_url(down_url_link.contents[0])
 
             delay = down_page.find('body').decode_contents()
 
