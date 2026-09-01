@@ -1,5 +1,5 @@
 # mako/lookup.py
-# Copyright 2006-2024 the Mako authors and contributors <see AUTHORS file>
+# Copyright 2006-2025 the Mako authors and contributors <see AUTHORS file>
 #
 # This module is part of Mako and is released under
 # the MIT License: http://www.opensource.org/licenses/mit-license.php
@@ -241,7 +241,7 @@ class TemplateLookup(TemplateCollection):
             else:
                 return self._collection[uri]
         except KeyError as e:
-            u = re.sub(r"^\/+", "", uri)
+            u = re.sub(r"^\/+", "", uri.replace("\\", "/"))
             for dir_ in self.directories:
                 # make sure the path seperators are posix - os.altsep is empty
                 # on POSIX and cannot be used.

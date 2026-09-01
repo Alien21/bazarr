@@ -15,7 +15,6 @@ from time import mktime
 from time import struct_time
 from urllib.parse import quote
 from urllib.parse import unquote
-from urllib.request import parse_http_list as _parse_list_header
 
 from ._internal import _dt_as_utc
 from ._internal import _plain_int
@@ -172,20 +171,24 @@ def quote_header_value(value: t.Any, allow_token: bool = True) -> str:
     return f'"{value_str}"'
 
 
+_unslash_re = re.compile(r"\\(.)", re.A)
+
+
 def unquote_header_value(value: str) -> str:
-    """Remove double quotes and decode slash-escaped ``"`` and ``\\`` characters in a
-    header value.
+    """Remove double quotes and backslash escapes from a header value.
 
     This is the reverse of :func:`quote_header_value`.
 
     :param value: The header value to unquote.
 
+    .. versionchanged:: 3.2
+        Removes escape preceding any character.
+
     .. versionchanged:: 3.0
         The ``is_filename`` parameter is removed.
     """
     if len(value) >= 2 and value[0] == value[-1] == '"':
-        value = value[1:-1]
-        return value.replace("\\\\", "\\").replace('\\"', '"')
+        return _unslash_re.sub(r"\g<1>", value[1:-1])
 
     return value
 
@@ -301,8 +304,8 @@ def parse_list_header(value: str) -> list[str]:
     """Parse a header value that consists of a list of comma separated items according
     to `RFC 9110 <https://httpwg.org/specs/rfc9110.html#abnf.extension>`__.
 
-    This extends :func:`urllib.request.parse_http_list` to remove surrounding quotes
-    from values.
+    Surrounding quotes are removed from items, but internal quotes are left for
+    future parsing. Empty values are discarded.
 
     .. code-block:: python
 
@@ -312,16 +315,50 @@ def parse_list_header(value: str) -> list[str]:
     This is the reverse of :func:`dump_header`.
 
     :param value: The header value to parse.
+
+    .. versionchanged:: 3.2
+        Quotes and escapes are kept if only part of an item is quoted. Empty
+        values are omitted. An empty list is returned if the value contains an
+        unclosed quoted string.
     """
-    result = []
+    items = []
+    item = ""
+    escape = False
+    quote = False
 
-    for item in _parse_list_header(value):
-        if len(item) >= 2 and item[0] == item[-1] == '"':
-            item = item[1:-1]
+    for char in value:
+        if escape:
+            escape = False
+            item += char
+            continue
 
-        result.append(item)
+        if quote:
+            if char == "\\":
+                escape = True
+            elif char == '"':
+                quote = False
 
-    return result
+            item += char
+            continue
+
+        if char == ",":
+            items.append(item)
+            item = ""
+            continue
+
+        if char == '"':
+            quote = True
+
+        item += char
+
+    if quote:
+        # invalid, unclosed quoted string
+        return []
+
+    items.append(item)
+    return [
+        unquote_header_value(item) for item in (item.strip() for item in items) if item
+    ]
 
 
 def parse_dict_header(value: str) -> dict[str, str | None]:
@@ -342,6 +379,10 @@ def parse_dict_header(value: str) -> dict[str, str | None]:
     and ISO-8859-1 charsets are accepted, otherwise the value remains quoted.
 
     :param value: The header value to parse.
+
+    .. versionchanged:: 3.2
+        An empty dict is returned if the value contains an unclosed quoted
+        string.
 
     .. versionchanged:: 3.0
         Passing bytes is not supported.
@@ -390,10 +431,7 @@ def parse_dict_header(value: str) -> dict[str, str | None]:
                 # invalid bytes are replaced during unquoting
                 value = unquote(value, encoding=encoding)
 
-        if len(value) >= 2 and value[0] == value[-1] == '"':
-            value = value[1:-1]
-
-        result[key] = value
+        result[key] = unquote_header_value(value)
 
     return result
 
@@ -599,7 +637,7 @@ def parse_accept_header(
         Parse according to RFC 9110. Items with invalid ``q`` values are skipped.
     """
     if cls is None:
-        cls = t.cast(t.Type[_TAnyAccept], ds.Accept)
+        cls = t.cast(type[_TAnyAccept], ds.Accept)
 
     if not value:
         return cls(None)
@@ -914,6 +952,10 @@ def quote_etag(etag: str, weak: bool = False) -> str:
     return etag
 
 
+@t.overload
+def unquote_etag(etag: str) -> tuple[str, bool]: ...
+@t.overload
+def unquote_etag(etag: None) -> tuple[None, None]: ...
 def unquote_etag(
     etag: str | None,
 ) -> tuple[str, bool] | tuple[None, None]:
@@ -1235,6 +1277,7 @@ def dump_cookie(
     sync_expires: bool = True,
     max_size: int = 4093,
     samesite: str | None = None,
+    partitioned: bool = False,
 ) -> str:
     """Create a Set-Cookie header without the ``Set-Cookie`` prefix.
 
@@ -1271,8 +1314,13 @@ def dump_cookie(
         <cookie_>`_. Set to 0 to disable this check.
     :param samesite: Limits the scope of the cookie such that it will
         only be attached to requests if those requests are same-site.
+    :param partitioned: Opts the cookie into partitioned storage. This
+        will also set secure to True
 
     .. _`cookie`: http://browsercookielimits.squawky.net/
+
+    .. versionchanged:: 3.1
+        The ``partitioned`` parameter was added.
 
     .. versionchanged:: 3.0
         Passing bytes, and the ``charset`` parameter, were removed.
@@ -1317,6 +1365,9 @@ def dump_cookie(
         if samesite not in {"Strict", "Lax", "None"}:
             raise ValueError("SameSite must be 'Strict', 'Lax', or 'None'.")
 
+    if partitioned:
+        secure = True
+
     # Quote value if it contains characters not allowed by RFC 6265. Slash-escape with
     # three octal digits, which matches http.cookies, although the RFC suggests base64.
     if not _cookie_no_quote_re.fullmatch(value):
@@ -1338,6 +1389,7 @@ def dump_cookie(
         ("HttpOnly", httponly),
         ("Path", path),
         ("SameSite", samesite),
+        ("Partitioned", partitioned),
     ):
         if v is None or v is False:
             continue
@@ -1387,5 +1439,5 @@ def is_byte_range_valid(
 
 
 # circular dependencies
-from . import datastructures as ds
-from .sansio import http as _sansio_http
+from . import datastructures as ds  # noqa: E402
+from .sansio import http as _sansio_http  # noqa: E402

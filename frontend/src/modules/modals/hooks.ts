@@ -1,7 +1,6 @@
-/* eslint-disable @typescript-eslint/ban-types */
 import { useCallback, useContext, useMemo } from "react";
 import { useModals as useMantineModals } from "@mantine/modals";
-import { ModalSettings } from "@mantine/modals/lib/context";
+import { ModalSettings } from "@mantine/modals";
 import { ModalComponent, ModalIdContext } from "./WithModal";
 
 export function useModals() {

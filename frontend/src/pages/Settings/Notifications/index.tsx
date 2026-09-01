@@ -48,6 +48,14 @@ const SettingsNotificationsView: FunctionComponent = () => {
         <Message>
           Suppress notifications when manually download/upload subtitles.
         </Message>
+        <Check
+          label="Notify when there are no missing subtitles"
+          settingKey="settings-general-notify_if_nothing_is_missing_for_signalr_event"
+        ></Check>
+        <Message>
+          Notify when there are no missing subtitles for a specific episode or
+          movie synced by a LIVE event.
+        </Message>
       </Section>
     </Layout>
   );

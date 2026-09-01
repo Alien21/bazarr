@@ -10,6 +10,7 @@ from guessit.jsonutils import GuessitEncoder
 from utilities.path_mappings import path_mappings
 from app.database import TableEpisodes, TableMovies, database, select
 from utilities.video_analyzer import parse_video_metadata
+from languages.get_languages import language_from_alpha3
 
 
 def refine_from_ffprobe(path, video):
@@ -76,6 +77,14 @@ def refine_from_ffprobe(path, video):
                 video.audio_codec = parser_data['audio'][0]['codec']
         for track in parser_data['audio']:
             if 'language' in track:
-                video.audio_languages.add(track['language'].alpha3)
+                language = track['language']
+                if language is not None:
+                    if hasattr(language, 'alpha3'):
+                        alpha3 = language.alpha3
+                    elif isinstance(language, str) and len(language) == 3 and language_from_alpha3(language) is not None:
+                        alpha3 = str(language)
+                    else:
+                        continue
+                    video.audio_languages.add(alpha3)
 
     return video

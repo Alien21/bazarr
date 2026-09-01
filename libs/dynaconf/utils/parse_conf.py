@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import string
 import warnings
 from functools import wraps
 
@@ -16,9 +17,10 @@ from dynaconf.vendor import toml
 from dynaconf.vendor import tomllib
 
 try:
-    from jinja2 import Environment
+    import jinja2
+    from jinja2.sandbox import SandboxedEnvironment
 
-    jinja_env = Environment()
+    jinja_env = SandboxedEnvironment()
     for p_method in ("abspath", "realpath", "relpath", "dirname", "basename"):
         jinja_env.filters[p_method] = getattr(os.path, p_method)
 except ImportError:  # pragma: no cover
@@ -133,12 +135,63 @@ class Merge(MetaValue):
                     }
                 elif "," in self.value:
                     # @merge foo,bar
-                    self.value = self.value.split(",")
+                    self.value = [
+                        parse_conf_data(
+                            v, tomlfy=True, box_settings=box_settings
+                        )
+                        for v in self.value.split(",")
+                    ]
                 else:
                     # @merge foo
                     self.value = [self.value]
 
         self.unique = unique
+
+
+class Insert(MetaValue):
+    """Triggers the value to be inserted into a list at specific index"""
+
+    _dynaconf_insert = True
+
+    def __init__(self, value, box_settings):
+        """
+        normally value will be a string like
+        `0 foo` or `-1 foo` and needs to get split
+        but value can also be just a single string with or without space
+        like `foo` and in this case it will be treated as `0 foo`
+        but it can also be `foo bar` and in this case it will be treated as `0 foo bar`
+        we need to check if the first part is a number
+        if it is not a number then we will treat it as `0 value`
+        if it is a number then we will split it as `index, value`
+        this must use a regex to match value, examples:
+            -1 foo -> index = -1, value = foo
+            0 foo -> index = 0, value = foo
+            0 foo bar -> index = 0, value = foo bar
+            0 42 -> index = 0, value = 42
+            0 42 foo -> index = 0, value = 42 foo
+            foo -> index = 0, value = foo
+            foo bar -> index = 0, value = foo bar
+            42 -> index = 0, value = 42
+            42 foo -> index = 42, value = foo
+            42 foo bar -> index = 42, value = foo bar
+        """
+        self.box_settings = box_settings
+
+        try:
+            if value.lstrip("-+")[0].isdigit():
+                # `0 foo` or `-1 foo` or `42 foo` or `42`(raise ValueError)
+                index, value = value.split(" ", 1)
+            else:
+                # `foo` or `foo bar`
+                index, value = 0, value
+        except ValueError:
+            # `42` or any other non split able value
+            index, value = 0, value
+
+        self.index = int(index)
+        self.value = parse_conf_data(
+            value, tomlfy=True, box_settings=box_settings
+        )
 
 
 class BaseFormatter:
@@ -160,12 +213,16 @@ class BaseFormatter:
         return str(self.token)
 
 
-def _jinja_formatter(value, **context):
+def _jinja_formatter(value: str, **context) -> str:
     if jinja_env is None:  # pragma: no cover
         raise ImportError(
             "jinja2 must be installed to enable '@jinja' settings in dynaconf"
         )
-    return jinja_env.from_string(value).render(**context)
+    try:
+        return jinja_env.from_string(value).render(**context)
+    except jinja2.exceptions.SecurityError:
+        warnings.warn(f"Unsafe access attempt to: {value}")
+        return ""
 
 
 def _get_formatter(value, **context):
@@ -185,27 +242,59 @@ def _get_formatter(value, **context):
     cast group will match anything provided after @
     the default group will match anything between single or double quotes
     """
-    pattern = re.compile(
-        r"(?P<key>\w+(?:\.\w+)?)\s*"
-        r"(?:(?P<cast>@\w+)\s*)?"
-        r'(?P<quote>["\']?)'
-        r'\s*(?P<default>[^"\']*)\s*(?P=quote)?'
-    )
-    if match := pattern.match(value.strip()):
-        data = match.groupdict()
-        return context["this"].get(
-            key=data["key"],
-            default=data["default"],
-            cast=data["cast"],
-        )
-    else:
+    tokens = value.strip().split()
+    if not tokens or len(tokens) > 3:
         raise DynaconfFormatError(f"Error parsing {value} malformed syntax.")
+
+    params = {
+        "key": tokens[0],
+        "cast": None,
+        "default": None,
+    }
+    for token in tokens[1:]:
+        if token.startswith("@"):
+            params["cast"] = token
+        else:
+            params["default"] = token
+
+    if not params["default"] and params["key"] not in context["this"]:
+        raise DynaconfParseError(
+            f"Key {params['key']} not found in settings and no default value provided."
+        )
+
+    return context["this"].get(**params)
+
+
+class SafeFormatter(string.Formatter):
+    def get_field(self, field_name, args, context):
+        self._validate_key_exists(field_name, context)
+        return super().get_field(field_name, args, context)
+
+    def _validate_key_exists(self, field_name: str, context):
+        if not field_name.lower().startswith("this"):
+            return
+        from dynaconf.base import _PUBLIC_PROPERTIES
+
+        field_name = field_name.replace("[", ".")
+        field_name = field_name.replace("]", "")
+        context_name, _, key = field_name.partition(".")
+        # these are accessible by the user, but are not considered setting keys
+        # e.g, settings.current_env
+        if key in _PUBLIC_PROPERTIES:
+            return
+        # allow only existing setting keys
+        if key not in context[context_name]:
+            raise AttributeError(key)
+
+
+def _format_formatter(input: str, **context) -> str:
+    return SafeFormatter().format(input, **context)
 
 
 class Formatters:
     """Dynaconf builtin formatters"""
 
-    python_formatter = BaseFormatter(str.format, "format")
+    python_formatter = BaseFormatter(_format_formatter, "format")
     jinja_formatter = BaseFormatter(_jinja_formatter, "jinja")
     get_formatter = BaseFormatter(_get_formatter, "get")
 
@@ -219,8 +308,14 @@ class Lazy:
         self, value=empty, formatter=Formatters.python_formatter, casting=None
     ):
         self.value = value
-        self.formatter = formatter
         self.casting = casting
+        # Sometimes a simple function is passed to the formatter.
+        # but on evaluation-time, we may need to access `formatter.token`
+        # so we are wrapping the fn to comply with this interface.
+        if isinstance(formatter, BaseFormatter):
+            self.formatter = formatter
+        else:
+            self.formatter = BaseFormatter(formatter, "lambda")
 
     @property
     def context(self):
@@ -303,6 +398,7 @@ converters = {
     "@merge_unique": lambda value, box_settings: Merge(
         value, box_settings, unique=True
     ),
+    "@insert": Insert,
     "@get": lambda value: Lazy(value, formatter=Formatters.get_formatter),
     # Special markers to be used as placeholders e.g: in prefilled forms
     # will always return None when evaluated
@@ -443,7 +539,7 @@ def parse_conf_data(data, tomlfy=False, box_settings=None):
         # recursively parse inner dict items
         # It is important to keep the same object id because
         # of mutability
-        for k, v in data._safe_items():
+        for k, v in data.items(bypass_eval=True):
             data[k] = parse_conf_data(
                 v, tomlfy=tomlfy, box_settings=box_settings
             )

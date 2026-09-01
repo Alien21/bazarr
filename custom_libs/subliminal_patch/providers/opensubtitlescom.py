@@ -132,7 +132,7 @@ class OpenSubtitlesComSubtitle(Subtitle):
         # rest is same for both groups
 
         # year
-        if video.year == self.year:
+        if self.imdb_match or video.year == self.year:
             self.matches.add('year')
 
         # release_group
@@ -348,9 +348,10 @@ class OpenSubtitlesComProvider(ProviderRetryMixin, Provider):
                 params.append(('episode_number', self.video.episode))
             if self.video.season:
                 params.append(('season_number', self.video.season))
+
             if self.video.series_imdb_id:
                 params.append(('parent_imdb_id', self.sanitize_external_ids(self.video.series_imdb_id)))
-            if title_id:
+            elif title_id:
                 params.append(('parent_feature_id', title_id))
         else:
             if not imdb_id and not title_id:
@@ -459,13 +460,13 @@ class OpenSubtitlesComProvider(ProviderRetryMixin, Provider):
     def download_subtitle(self, subtitle):
         logger.info('Downloading subtitle %r', subtitle)
 
-        headers = {'Accept': 'application/json', 'Content-Type': 'application/json',
-                   'Authorization': 'Bearer ' + self.token}
         res = self.retry(
             lambda: self.checked(
                 lambda: self.session.post(self.server_url() + 'download',
                                           json={'file_id': subtitle.file_id, 'sub_format': 'srt'},
-                                          headers=headers,
+                                          headers={'Accept': 'application/json',
+                                                   'Content-Type': 'application/json',
+                                                   'Authorization': 'Bearer ' + self.token},
                                           timeout=30),
                 validate_json=True,
                 json_key_name='link'
@@ -493,11 +494,11 @@ class OpenSubtitlesComProvider(ProviderRetryMixin, Provider):
             subtitle_content = r.content
             subtitle.content = fix_line_ending(subtitle_content)
 
-    @staticmethod
-    def reset_token():
+    def reset_token(self):
         logger.debug('Authentication failed: clearing cache and attempting to login.')
         region.delete("oscom_token")
         region.delete("oscom_server")
+        self.session.headers.pop('Authorization', None)
         return
 
     def checked(self, fn, raise_api_limit=False, validate_json=False, json_key_name=None, validate_content=False,
@@ -570,7 +571,7 @@ class OpenSubtitlesComProvider(ProviderRetryMixin, Provider):
                                                 f"downloaded. Quota will be reset in {quota_reset_time}.")
             elif status_code == 410:
                 log_request_response(response)
-                raise ProviderError("Download as expired")
+                raise ProviderError("Download link has expired")
             elif status_code == 429:
                 log_request_response(response)
                 raise TooManyRequests()
@@ -605,6 +606,10 @@ class OpenSubtitlesComProvider(ProviderRetryMixin, Provider):
 
 
 def log_request_response(response, non_standard=True):
+    if not response or not response.request:
+        logger.debug("No request or response to log.")
+        return
+
     redacted_request_headers = response.request.headers
     if 'Authorization' in redacted_request_headers and isinstance(redacted_request_headers['Authorization'], str):
         redacted_request_headers['Authorization'] = redacted_request_headers['Authorization'][:-8]+8*'x'

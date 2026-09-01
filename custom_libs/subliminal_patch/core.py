@@ -24,7 +24,7 @@ from concurrent.futures import as_completed
 
 from .extensions import provider_registry
 from .exceptions import MustGetBlacklisted
-from .score import compute_score as default_compute_score
+from .score import compute_score, MAX_SCORES
 from subliminal.utils import hash_napiprojekt, hash_opensubtitles, hash_shooter, hash_thesubdb
 from subliminal.video import VIDEO_EXTENSIONS, Video, Episode, Movie
 from subliminal.core import guessit, ProviderPool, io, is_windows_special_path, \
@@ -524,7 +524,7 @@ class SZProviderPool(ProviderPool):
         return True
 
     def download_best_subtitles(self, subtitles, video, languages, min_score=0, hearing_impaired=False, only_one=False,
-                                compute_score=None, use_original_format=False):
+                                use_original_format=False, fallback_allowed=False):
         """Download the best matching subtitles.
 
         patch:
@@ -541,18 +541,15 @@ class SZProviderPool(ProviderPool):
         :param int min_score: minimum score for a subtitle to be downloaded.
         :param bool hearing_impaired: hearing impaired preference.
         :param bool only_one: download only one subtitle, not one per language.
-        :param compute_score: function that takes `subtitle` and `video` as positional arguments,
-            `hearing_impaired` as keyword argument and returns the score.
         :param bool use_original_format: preserve original subtitles format
         :return: downloaded subtitles.
         :rtype: list of :class:`~subliminal.subtitle.Subtitle`
 
         """
-        compute_score = compute_score or default_compute_score
         use_hearing_impaired = hearing_impaired in ("prefer", "force HI")
 
         is_episode = isinstance(video, Episode)
-        max_score = sum(val for key, val in compute_score._scores['episode' if is_episode else 'movie'].items() if key != "hash")
+        max_score = MAX_SCORES['episode' if is_episode else 'movie']
 
         # sort subtitles by score
         unsorted_subtitles = []
@@ -564,7 +561,9 @@ class SZProviderPool(ProviderPool):
                 continue
 
             try:
-                matches = s.get_matches(video)
+                matches = s.matches if hasattr(s, 'matches') and isinstance(s.matches, set) and len(s.matches) \
+                        else s.get_matches(video)
+
             except AttributeError:
                 logger.error("%r: Match computation failed: %s", s, traceback.format_exc())
                 continue
@@ -635,6 +634,24 @@ class SZProviderPool(ProviderPool):
             if only_one:
                 logger.debug('Only one subtitle downloaded')
                 break
+
+        # --- WHISPER FALLBACK PRECONDITIONS ---
+        # 1. No regular provider results with at least minimum score
+        # 2. We are in a Bulk Task or Single Series search
+        # 3. User enabled the Whisper fallback setting
+        # 4. Whisper is actually in the active providers list
+        if (not downloaded_subtitles and 
+            fallback_allowed and 
+            'whisperai' in self.providers):
+            
+            for subtitle, score, score_without_hash, matches, orig_matches in scored_subtitles:
+                if subtitle.provider_name == 'whisperai':
+                    logger.info('BAZARR Bulk Task: Falling back to Whisper for %r', video.name)
+                    subtitle.use_original_format = use_original_format
+                    if self.download_subtitle(subtitle):
+                        subtitle.score = score
+                        downloaded_subtitles.append(subtitle)
+                        break
 
         return downloaded_subtitles
 
@@ -1085,7 +1102,7 @@ def download_subtitles(subtitles, pool_class=ProviderPool, **kwargs):
             pool.download_subtitle(subtitle)
 
 
-def download_best_subtitles(videos, languages, min_score=0, hearing_impaired=False, only_one=False, compute_score=None,
+def download_best_subtitles(videos, languages, min_score=0, hearing_impaired=False, only_one=False,
                             pool_class=ProviderPool, throttle_time=0, **kwargs):
     r"""List and download the best matching subtitles.
 
@@ -1098,8 +1115,6 @@ def download_best_subtitles(videos, languages, min_score=0, hearing_impaired=Fal
     :param int min_score: minimum score for a subtitle to be downloaded.
     :param bool hearing_impaired: hearing impaired preference.
     :param bool only_one: download only one subtitle, not one per language.
-    :param compute_score: function that takes `subtitle` and `video` as positional arguments,
-        `hearing_impaired` as keyword argument and returns the score.
     :param pool_class: class to use as provider pool.
     :type pool_class: :class:`ProviderPool`, :class:`AsyncProviderPool` or similar
     :param \*\*kwargs: additional parameters for the provided `pool_class` constructor.
@@ -1156,20 +1171,21 @@ def get_subtitle_path(video_path, language=None, extension='.srt', forced_tag=Fa
 
     """
     subtitle_root = os.path.splitext(video_path)[0]
-    tags = tags or []
-    hi_extension = os.environ.get("SZ_HI_EXTENSION", "hi")
-
-    if forced_tag:
-        tags.append("forced")
-
-    elif hi_tag:
-        tags.append(hi_extension)
 
     if language:
         subtitle_root += '.' + str(language.basename)
 
-    if tags:
-        subtitle_root += ".%s" % "-".join(tags)
+        tags = tags or []
+        hi_extension = os.environ.get("SZ_HI_EXTENSION", "hi")
+
+        if forced_tag:
+            tags.append("forced")
+
+        elif hi_tag:
+            tags.append(hi_extension)
+
+        if tags:
+            subtitle_root += ".%s" % "-".join(tags)
 
     return subtitle_root + extension
 
@@ -1200,9 +1216,6 @@ def save_subtitles(file_path, subtitles, single=False, directory=None, chmod=Non
 
     saved_subtitles = []
     for subtitle in subtitles:
-        # check if HI mods will be used to get the proper name for the subtitles file
-        must_remove_hi = subtitle.mods and 'remove_HI' in subtitle.mods
-
         # check content
         if subtitle.content is None or subtitle.text is None:
             logger.error('Skipping subtitle %r: no content', subtitle)
@@ -1219,9 +1232,16 @@ def save_subtitles(file_path, subtitles, single=False, directory=None, chmod=Non
                 parse_for_hi_regex(subtitle_text=subtitle.text, alpha3_language=subtitle.language.alpha3 if
                                    (hasattr(subtitle, 'language') and hasattr(subtitle.language, 'alpha3')) else None)):
             subtitle.language.hi = True
+
+        # check if HI mods will be used to get the proper name for the subtitles file
+        if subtitle.mods and 'remove_HI' in subtitle.mods:
+            if hasattr(subtitle, 'hearing_impaired'):
+                subtitle.hearing_impaired = False
+            if hasattr(subtitle, 'language') and hasattr(subtitle.language, 'hi'):
+                subtitle.language.hi = False
+
         subtitle_path = get_subtitle_path(file_path, None if single else subtitle.language,
-                                          forced_tag=subtitle.language.forced,
-                                          hi_tag=False if must_remove_hi else subtitle.language.hi, tags=tags)
+                                          forced_tag=subtitle.language.forced, hi_tag=subtitle.language.hi, tags=tags)
         if directory is not None:
             subtitle_path = os.path.join(directory, os.path.split(subtitle_path)[1])
 

@@ -1,5 +1,5 @@
 # orm/query.py
-# Copyright (C) 2005-2025 the SQLAlchemy authors and contributors
+# Copyright (C) 2005-2026 the SQLAlchemy authors and contributors
 # <see AUTHORS file>
 #
 # This module is part of SQLAlchemy and is released under
@@ -18,6 +18,7 @@ ORM session, whereas the ``Select`` construct interacts directly with the
 database to return iterable result sets.
 
 """
+
 from __future__ import annotations
 
 import collections.abc as collections_abc
@@ -93,7 +94,7 @@ from ..sql.selectable import LABEL_STYLE_TABLENAME_PLUS_COL
 from ..sql.selectable import SelectLabelStyle
 from ..util.typing import Literal
 from ..util.typing import Self
-
+from ..util.typing import SupportsIndex
 
 if TYPE_CHECKING:
     from ._typing import _EntityType
@@ -134,6 +135,7 @@ if TYPE_CHECKING:
     from ..sql._typing import _TypedColumnClauseArgument as _TCCA
     from ..sql.base import CacheableOptions
     from ..sql.base import ExecutableOption
+    from ..sql.dml import UpdateBase
     from ..sql.elements import ColumnElement
     from ..sql.elements import Label
     from ..sql.selectable import _ForUpdateOfArgument
@@ -492,7 +494,7 @@ class Query(
         return cast("Select[_T]", self.statement)
 
     @property
-    def statement(self) -> Union[Select[_T], FromStatement[_T]]:
+    def statement(self) -> Union[Select[_T], FromStatement[_T], UpdateBase]:
         """The full SELECT statement represented by this Query.
 
         The statement by default will not have disambiguating labels
@@ -520,6 +522,8 @@ class Query(
         # from there, it starts to look much like Query itself won't be
         # passed into the execute process and won't generate its own cache
         # key; this will all occur in terms of the ORM-enabled Select.
+        stmt: Union[Select[_T], FromStatement[_T], UpdateBase]
+
         if not self._compile_options._set_base_alias:
             # if we don't have legacy top level aliasing features in use
             # then convert to a future select() directly
@@ -789,7 +793,7 @@ class Query(
         )
 
     @property
-    def selectable(self) -> Union[Select[_T], FromStatement[_T]]:
+    def selectable(self) -> Union[Select[_T], FromStatement[_T], UpdateBase]:
         """Return the :class:`_expression.Select` object emitted by this
         :class:`_query.Query`.
 
@@ -800,7 +804,9 @@ class Query(
         """
         return self.__clause_element__()
 
-    def __clause_element__(self) -> Union[Select[_T], FromStatement[_T]]:
+    def __clause_element__(
+        self,
+    ) -> Union[Select[_T], FromStatement[_T], UpdateBase]:
         return (
             self._with_compile_options(
                 _enable_eagerloads=False, _render_for_subquery=True
@@ -1037,7 +1043,7 @@ class Query(
         ":meth:`_orm.Query.get`",
         alternative="The method is now available as :meth:`_orm.Session.get`",
     )
-    def get(self, ident: _PKIdentityArgument) -> Optional[Any]:
+    def get(self, ident: _PKIdentityArgument) -> Optional[_T]:
         """Return an instance based on the given primary key identifier,
         or ``None`` if not found.
 
@@ -2553,6 +2559,12 @@ class Query(
         self._set_select_from(from_obj, False)
         return self
 
+    @overload
+    def __getitem__(self, item: slice) -> List[_T]: ...
+
+    @overload
+    def __getitem__(self, item: SupportsIndex) -> _T: ...
+
     def __getitem__(self, item: Any) -> Any:
         return orm_util._getitem(
             self,
@@ -2782,11 +2794,10 @@ class Query(
     def one(self) -> _T:
         """Return exactly one result or raise an exception.
 
-        Raises ``sqlalchemy.orm.exc.NoResultFound`` if the query selects
-        no rows.  Raises ``sqlalchemy.orm.exc.MultipleResultsFound``
-        if multiple object identities are returned, or if multiple
-        rows are returned for a query that returns only scalar values
-        as opposed to full identity-mapped entities.
+        Raises :class:`_exc.NoResultFound` if the query selects no rows.
+        Raises :class:`_exc.MultipleResultsFound` if multiple object identities
+        are returned, or if multiple rows are returned for a query that returns
+        only scalar values as opposed to full identity-mapped entities.
 
         Calling :meth:`.one` results in an execution of the underlying query.
 
@@ -2806,7 +2817,7 @@ class Query(
     def scalar(self) -> Any:
         """Return the first element of the first result or None
         if no rows present.  If multiple rows are returned,
-        raises MultipleResultsFound.
+        raises :class:`_exc.MultipleResultsFound`.
 
           >>> session.query(Item).scalar()
           <Item>
@@ -2840,7 +2851,7 @@ class Query(
         try:
             yield from result  # type: ignore
         except GeneratorExit:
-            # issue #8710 - direct iteration is not re-usable after
+            # issue #8710 - direct iteration is not reusable after
             # an iterable block is broken, so close the result
             result._soft_close()
             raise
@@ -3201,11 +3212,14 @@ class Query(
             delete_ = delete_.with_dialect_options(**delete_args)
 
         delete_._where_criteria = self._where_criteria
-        result: CursorResult[Any] = self.session.execute(
-            delete_,
-            self._params,
-            execution_options=self._execution_options.union(
-                {"synchronize_session": synchronize_session}
+        result = cast(
+            "CursorResult[Any]",
+            self.session.execute(
+                delete_,
+                self._params,
+                execution_options=self._execution_options.union(
+                    {"synchronize_session": synchronize_session}
+                ),
             ),
         )
         bulk_del.result = result  # type: ignore
@@ -3292,11 +3306,14 @@ class Query(
             upd = upd.with_dialect_options(**update_args)
 
         upd._where_criteria = self._where_criteria
-        result: CursorResult[Any] = self.session.execute(
-            upd,
-            self._params,
-            execution_options=self._execution_options.union(
-                {"synchronize_session": synchronize_session}
+        result = cast(
+            "CursorResult[Any]",
+            self.session.execute(
+                upd,
+                self._params,
+                execution_options=self._execution_options.union(
+                    {"synchronize_session": synchronize_session}
+                ),
             ),
         )
         bulk_ud.result = result  # type: ignore
@@ -3335,7 +3352,9 @@ class Query(
             ORMCompileState._get_plugin_class_for_plugin(stmt, "orm"),
         )
 
-        return compile_state_cls.create_for_statement(stmt, None)
+        return compile_state_cls._create_orm_context(
+            stmt, toplevel=True, compiler=None
+        )
 
     def _compile_context(self, for_statement: bool = False) -> QueryContext:
         compile_state = self._compile_state(for_statement=for_statement)

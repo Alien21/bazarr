@@ -15,8 +15,6 @@ from subliminal_patch.subtitle import Subtitle, guess_matches
 
 logger = logging.getLogger(__name__)
 
-CUSTOM_SESSION_EXCLUDED_PROVIDERS = ["podnapisi.py"]
-
 
 class Provider(_Provider):
     hash_verifiable = False
@@ -105,8 +103,7 @@ for name in os.listdir(os.path.dirname(__file__)):
 
             # inject our requests.Session wrapper for automatic retry but not for specific providers that are already
             # struggling and that we don't want to hurt more
-            if name not in CUSTOM_SESSION_EXCLUDED_PROVIDERS:
-                mod.Session = RetryingSession
+            mod.Session = RetryingSession
 
             # inject our guess_matches function
             mod.guess_matches = guess_matches
@@ -121,7 +118,6 @@ for name in os.listdir(os.path.dirname(__file__)):
     else:
         # inject our requests.Session wrapper for automatic retry but not for specific providers that are already
         # struggling and that we don't want to hurt more
-        if name not in CUSTOM_SESSION_EXCLUDED_PROVIDERS:
-            subliminal_mod.Session = RetryingSession
+        subliminal_mod.Session = RetryingSession
         subliminal_mod.guess_matches = guess_matches
 

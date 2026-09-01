@@ -22,8 +22,8 @@ from requests import Session
 from six import text_type
 from random import randint, randrange
 
-from python_anticaptcha import AnticaptchaClient, ImageToTextTask
 from subliminal.providers import ParserBeautifulSoup
+from subliminal_patch.pitcher import pitchers
 from subliminal_patch.providers import Provider
 from subliminal.subtitle import (
     SUBTITLE_EXTENSIONS,
@@ -124,11 +124,15 @@ class ZimukuProvider(Provider):
                 return img_fp
 
             fp = bmp_to_image(image_content)
-            task = ImageToTextTask(fp)
-            client = AnticaptchaClient(os.environ.get('ANTICAPTCHA_ACCOUNT_KEY'))
-            job = client.createTask(task)
-            job.join()
-            return job.get_captcha_text()
+            anticaptcha_class = os.environ["ANTICAPTCHA_CLASS"]
+            if anticaptcha_class == 'AntiCaptchaProxyLess':
+                image_pitcher = "AntiCaptchaImageToText"
+            elif anticaptcha_class == 'CaptchaAIProxyLess':
+                image_pitcher = "CaptchaAIImageToText"
+            else:
+                image_pitcher = "DeathByCaptchaImageToText"
+            pitcher = pitchers.get_pitcher(image_pitcher)("Zimuku", fp)
+            return pitcher.throw()
 
         i = -1
         while True:

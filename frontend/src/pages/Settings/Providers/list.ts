@@ -102,7 +102,7 @@ export const ProviderList: Readonly<ProviderInfo[]> = [
       {
         type: "text",
         key: "cookies",
-        name: "Cookies, e.g., PHPSESSID=abc; wikisubtitlesuser=xyz; wikisubtitlespass=efg",
+        name: "Cookies, you must copy the whole value from your browser",
       },
       {
         type: "text",
@@ -110,6 +110,11 @@ export const ProviderList: Readonly<ProviderInfo[]> = [
         name: "User-Agent, e.g., Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:95.0) Gecko/20100101 Firefox/95.0",
       },
     ],
+  },
+  {
+    key: "bayflix",
+    name: "Bayflix",
+    description: "Bulgarian Subtitles Provider",
   },
   {
     key: "assrt",
@@ -148,7 +153,7 @@ export const ProviderList: Readonly<ProviderInfo[]> = [
       {
         type: "text",
         key: "cookies",
-        name: "Cookies, e.g., PHPSESSID=abc; wikisubtitlesuser=xyz; wikisubtitlespass=efg",
+        name: "Cookies, you must copy the whole value from your browser",
       },
       {
         type: "text",
@@ -300,6 +305,24 @@ export const ProviderList: Readonly<ProviderInfo[]> = [
     ],
   },
   {
+    key: "pipocas",
+    name: "Pipocas.tv",
+    description:
+      "Portuguese / Brazilian / English / Spanish Subtitles Provider",
+    inputs: [
+      {
+        type: "text",
+        key: "username",
+        name: "Username",
+      },
+      {
+        type: "password",
+        key: "password",
+        name: "Password",
+      },
+    ],
+  },
+  {
     key: "legendasdivx",
     name: "LegendasDivx",
     description: "Brazilian / Portuguese Subtitles Provider",
@@ -399,16 +422,9 @@ export const ProviderList: Readonly<ProviderInfo[]> = [
     ],
   },
   {
-    key: "podnapisi",
-    name: "Podnapisi",
-    inputs: [
-      {
-        type: "switch",
-        key: "verify_ssl",
-        name: "Verify SSL certificate (disabling this introduces a MitM attack risk)",
-        defaultValue: true,
-      },
-    ],
+    key: "prijevodionline",
+    name: "Prijevodi Online",
+    description: "Prijevodi Online website. No need for login or cookies.",
   },
   {
     key: "regielive",
@@ -419,6 +435,11 @@ export const ProviderList: Readonly<ProviderInfo[]> = [
     key: "soustitreseu",
     name: "Sous-Titres.eu",
     description: "Mostly French Subtitles Provider",
+  },
+  {
+    key: "subclub",
+    name: "SubClub.eu",
+    description: "Estonian Subtitles Provider",
   },
   {
     key: "subdl",
@@ -461,6 +482,19 @@ export const ProviderList: Readonly<ProviderInfo[]> = [
     ],
   },
   {
+    key: "subsarr",
+    name: "Subsarr",
+    description:
+      "Self-hosted Subscene subtitle provider. (requires slimcdk/subsarr https://github.com/slimcdk/subsarr)",
+    inputs: [
+      {
+        type: "text",
+        key: "base_url",
+        name: "Base URL",
+      },
+    ],
+  },
+  {
     key: "subssabbz",
     name: "Subs.sab.bz",
     description: "Bulgarian Subtitles Provider",
@@ -474,13 +508,22 @@ export const ProviderList: Readonly<ProviderInfo[]> = [
     key: "subs4series",
     name: "Subs4Series",
     description:
-      "Greek Subtitles Provider.\nRequires anti-captcha provider to solve captchas for each download.",
+      "Greek Subtitles Provider.\nRequires Anti-Captcha Provider to solve captchas for each download.",
   },
   { key: "subscenter", description: "Hebrew Subtitles Provider" },
   {
     key: "subsro",
-    name: "subs.ro",
+    name: "Subs.ro",
     description: "Romanian Subtitles Provider",
+    message:
+      "API key required. Get your key from Subs.ro website: https://subs.ro/api",
+    inputs: [
+      {
+        type: "text",
+        key: "api_key",
+        name: "API Key",
+      },
+    ],
   },
   {
     key: "subsunacs",
@@ -679,9 +722,15 @@ export const ProviderList: Readonly<ProviderInfo[]> = [
   },
   { key: "yifysubtitles", name: "YIFY Subtitles" },
   {
+    key: "vladoonmooo",
+    name: "Vladoon Mooo",
+    description: "Bulgarian Subtitles Provider",
+  },
+  {
     key: "zimuku",
     name: "Zimuku",
-    description: "Chinese Subtitles Provider. Anti-captcha required.",
+    description:
+      "Chinese Subtitles Provider.\nRequires Anti-Captcha Provider to solve numeric captchas for each search and download.",
   },
 ];
 

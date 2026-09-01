@@ -1,6 +1,7 @@
 import { FunctionComponent } from "react";
 import { Anchor } from "@mantine/core";
 import {
+  Check,
   CollapseBox,
   Layout,
   Message,
@@ -61,12 +62,33 @@ const SettingsProvidersView: FunctionComponent = () => {
           </Anchor>
           <Message>Link to subscribe</Message>
         </CollapseBox>
+        <CollapseBox
+          settingKey="settings-general-anti_captcha_provider"
+          on={(value) => value === "captchaai"}
+        >
+          <Text
+            label="Account Key"
+            settingKey="settings-captchaai-captchaai_key"
+          ></Text>
+          <Anchor href="https://captchaai.com">CaptchaAI.com</Anchor>
+          <Message>Link to subscribe</Message>
+        </CollapseBox>
       </Section>
       <Section header="Integrations">
         <ProviderView
           availableOptions={IntegrationList}
           settingsKey="settings-general-enabled_integrations"
         ></ProviderView>
+      </Section>
+      <Section header="Security">
+        <Check
+          label="Disable All Providers HTTPS Certificate Validation"
+          settingKey="settings-general-disable_all_providers_ssl_verify"
+        ></Check>
+        <Message>
+          Disable all providers HTTPS certificate validation. Do not change
+          unless you get SSL issues with providers and you understand the risks.
+        </Message>
       </Section>
     </Layout>
   );

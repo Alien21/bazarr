@@ -2,7 +2,6 @@
 
 import os
 import datetime
-import pytz
 import logging
 import subliminal_patch
 import pretty
@@ -12,6 +11,7 @@ import requests
 import traceback
 import re
 
+from zoneinfo import ZoneInfo
 from requests import ConnectionError
 from subzero.language import Language
 from subliminal_patch.exceptions import (TooManyRequests, APIThrottled, ParseResponseError, IPAddressBlocked,
@@ -32,8 +32,7 @@ from utilities.analytics import event_tracker
 _TRACEBACK_RE = re.compile(r'File "(.*?providers[\\/].*?)", line (\d+)')
 
 
-def time_until_midnight(timezone):
-    # type: (datetime.datetime) -> datetime.timedelta
+def time_until_midnight(timezone: ZoneInfo) -> datetime.timedelta:
     """
     Get timedelta until midnight.
     """
@@ -46,13 +45,18 @@ def time_until_midnight(timezone):
 # Titulky resets its download limits at the start of a new day from its perspective - the Europe/Prague timezone
 # Needs to convert to offset-naive dt
 def titulky_limit_reset_timedelta():
-    return time_until_midnight(timezone=pytz.timezone('Europe/Prague'))
+    return time_until_midnight(timezone=ZoneInfo('Europe/Prague'))
 
 
 # LegendasDivx reset its searches limit at approximately midnight, Lisbon time, every day. We wait 1 more hours just
 # to be sure.
 def legendasdivx_limit_reset_timedelta():
-    return time_until_midnight(timezone=pytz.timezone('Europe/Lisbon')) + datetime.timedelta(minutes=60)
+    return time_until_midnight(timezone=ZoneInfo('Europe/Lisbon')) + datetime.timedelta(minutes=60)
+
+
+# Get timedelta until midnight GMT
+def midnight_gmt_limit_reset_timedelta():
+    return time_until_midnight(timezone=ZoneInfo('Etc/GMT')) + datetime.timedelta(minutes=15)
 
 
 VALID_THROTTLE_EXCEPTIONS = (TooManyRequests, DownloadLimitExceeded, ServiceUnavailable, APIThrottled,
@@ -81,6 +85,7 @@ def provider_throttle_map():
         "opensubtitlescom": {
             TooManyRequests: (datetime.timedelta(minutes=1), "1 minute"),
             DownloadLimitExceeded: (datetime.timedelta(hours=6), "6 hours"),
+            ProviderError: (datetime.timedelta(minutes=1), "1 minute"),
         },
         "addic7ed": {
             DownloadLimitExceeded: (datetime.timedelta(hours=3), "3 hours"),
@@ -117,7 +122,7 @@ def provider_throttle_map():
                 f"{legendasdivx_limit_reset_timedelta().seconds // 3600 + 1} hours"),
         },
         "whisperai": {
-            ConnectionError: (datetime.timedelta(hours=24), "24 hours"),
+            ConnectionError: (datetime.timedelta(minutes=5), "5 minutes"),
         },
         "regielive": {
             APIThrottled: (datetime.timedelta(hours=1), "1 hour"),
@@ -132,6 +137,10 @@ def provider_throttle_map():
         },
         "subdl": {
             ProviderError: (datetime.timedelta(hours=1), "1 hour"),
+            DownloadLimitExceeded: (
+                midnight_gmt_limit_reset_timedelta(),
+                f"{midnight_gmt_limit_reset_timedelta().seconds // 3600 + 1} hours"),
+            APIThrottled: (datetime.timedelta(minutes=15), "15 minutes"),
         }
     }
 
@@ -207,7 +216,7 @@ def get_providers():
                 providers_list.remove(provider)
             else:
                 logging.info("Using %s again after %s, (disabled because: %s)", provider, throttle_desc, reason)
-                del tp[provider]
+                tp.pop(provider, None)
                 set_throttled_providers(str(tp))
         # if forced only is enabled: # fixme: Prepared for forced only implementation to remove providers with don't support forced only subtitles
         #     for provider in providers_list:
@@ -258,11 +267,6 @@ def get_providers_auth():
                              },
         'napiprojekt': {'only_authors': settings.napiprojekt.only_authors,
                         'only_real_names': settings.napiprojekt.only_real_names},
-        'podnapisi': {
-            'only_foreign': False,  # fixme
-            'also_foreign': False,  # fixme
-            'verify_ssl': settings.podnapisi.verify_ssl
-        },
         'legendasdivx': {
             'username': settings.legendasdivx.username,
             'password': settings.legendasdivx.password,
@@ -271,6 +275,10 @@ def get_providers_auth():
         'legendasnet': {
             'username': settings.legendasnet.username,
             'password': settings.legendasnet.password,
+        },
+        'pipocas': {
+            'username': settings.pipocas.username,
+            'password': settings.pipocas.password,
         },
         'xsubs': {
             'username': settings.xsubs.username,
@@ -355,11 +363,17 @@ def get_providers_auth():
         'subsource': {
             'api_key': settings.subsource.apikey,
         },
+        'subsarr': {
+            'base_url': settings.subsarr.base_url,
+        },
         'animesubinfo': {},
         'subx':
             {
                 'api_key': settings.subx.api_key,
-            }
+            },
+        'subsro': {
+            'api_key': settings.subsro.api_key,
+        }
     }
 
 
@@ -472,7 +486,7 @@ def update_throttled_provider():
 
     for provider in list(tp):
         if provider not in providers_list:
-            del tp[provider]
+            tp.pop(provider, None)
             set_throttled_providers(str(tp))
 
         reason, until, throttle_desc = tp.get(provider, (None, None, None))
@@ -483,7 +497,7 @@ def update_throttled_provider():
                 pass
             else:
                 logging.info("Using %s again after %s, (disabled because: %s)", provider, throttle_desc, reason)
-                del tp[provider]
+                tp.pop(provider, None)
                 set_throttled_providers(str(tp))
 
             reason, until, throttle_desc = tp.get(provider, (None, None, None))
@@ -492,7 +506,7 @@ def update_throttled_provider():
                 now = datetime.datetime.now()
                 if now >= until:
                     logging.info("Using %s again after %s, (disabled because: %s)", provider, throttle_desc, reason)
-                    del tp[provider]
+                    tp.pop(provider, None)
                     set_throttled_providers(str(tp))
 
     event_stream(type='badges')
@@ -514,7 +528,7 @@ def reset_throttled_providers(only_auth_or_conf_error=False):
         if only_auth_or_conf_error and tp[provider][0] not in ['AuthenticationError', 'ConfigurationError',
                                                                'PaymentRequired']:
             continue
-        del tp[provider]
+        tp.pop(provider, None)
     set_throttled_providers(str(tp))
     update_throttled_provider()
     if only_auth_or_conf_error:

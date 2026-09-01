@@ -3,26 +3,24 @@ import logging
 import os
 import time
 import io
+from typing import Callable
 
 from zipfile import ZipFile, is_zipfile
 from urllib.parse import urljoin
-from requests import Session
+from requests import Session, Response
+from guessit import guessit
 
 from babelfish import language_converters
 from subzero.language import Language
 from subliminal import Episode, Movie
-from subliminal.exceptions import ConfigurationError, ProviderError, DownloadLimitExceeded
+from subliminal.exceptions import ConfigurationError, ProviderError, DownloadLimitExceeded, AuthenticationError
 from subliminal_patch.exceptions import APIThrottled
-from .mixins import ProviderRetryMixin
 from subliminal_patch.subtitle import Subtitle
 from subliminal.subtitle import fix_line_ending
 from subliminal_patch.providers import Provider
 from subliminal_patch.providers import utils
 
 logger = logging.getLogger(__name__)
-
-retry_amount = 3
-retry_timeout = 5
 
 language_converters.register('subdl = subliminal_patch.converters.subdl:SubdlConverter')
 
@@ -33,12 +31,15 @@ class SubdlSubtitle(Subtitle):
     hearing_impaired_verifiable = True
 
     def __init__(self, language, forced, hearing_impaired, page_link, download_link, file_id, release_names, uploader,
-                 season=None, episode=None):
+                 season=None, episode=None, absolute_episode=None, is_pack=False, is_direct_file=False):
         super().__init__(language)
         language = Language.rebuild(language, hi=hearing_impaired, forced=forced)
 
         self.season = season
         self.episode = episode
+        self.absolute_episode = absolute_episode
+        self.is_pack = is_pack
+        self.is_direct_file = is_direct_file
         self.releases = release_names
         self.release_info = ', '.join(release_names)
         self.language = language
@@ -61,30 +62,50 @@ class SubdlSubtitle(Subtitle):
         if isinstance(video, Episode):
             # series
             matches.add('series')
+            # episode — match by standard episode, absolute episode, or pack range
+            matched_by_absolute = False
+            if video.episode == self.episode:
+                matches.add('episode')
+            elif (getattr(video, 'absolute_episode', None) and
+                  video.absolute_episode == self.episode):
+                matches.add('episode')
+                matched_by_absolute = True
+            elif self.is_pack:
+                # Pack was already validated to contain the target episode
+                matches.add('episode')
             # season
             if video.season == self.season:
                 matches.add('season')
-            # episode
-            if video.episode == self.episode:
-                matches.add('episode')
-            # imdb
+            elif self.is_pack and self.absolute_episode:
+                # Arc-based season numbering (e.g. subdl's Enies Lobby = S09) differs from
+                # Sonarr's sequential numbering (S11). When a pack is validated via absolute
+                # episode range, trust the match regardless of season number discrepancy.
+                matches.add('season')
+            elif matched_by_absolute:
+                # Absolute episode numbering uniquely identifies the (season, episode) pair,
+                # so trust the season too — handles anime uploads tagged with season=0 or
+                # arc-based season numbering different from Sonarr's.
+                matches.add('season')
+            # imdb — IMDB match also confirms the year
             matches.add('series_imdb_id')
+            if video.year:
+                matches.add('year')
         else:
             # title
             matches.add('title')
             # imdb
             matches.add('imdb_id')
-            # tmdb 
+            # tmdb
             matches.add('tmdb_id')
 
-        utils.update_matches(matches, video, self.release_info)
+        utils.update_matches(matches, video, self.releases)
 
         self.matches = matches
 
         return matches
 
 
-class SubdlProvider(ProviderRetryMixin, Provider):
+class SubdlProvider(Provider):
     """Subdl Provider"""
     server_hostname = 'api.subdl.com'
 
@@ -139,43 +160,87 @@ class SubdlProvider(ProviderRetryMixin, Provider):
 
         # query the server
         if isinstance(self.video, Episode):
-            res = self.retry(
+            res = self.checked(
                 lambda: self.session.get(self.server_url() + 'subtitles',
                                          params=(('api_key', self.api_key),
+                                                 ('bazarr', 1),  # this argument filters incompatible image-based or
+                                         # txt subtitles
+                                                 ('comment', 1),
                                                  ('episode_number', self.video.episode),
                                                  ('film_name', title if not imdb_id else None),
                                                  ('imdb_id', imdb_id if imdb_id else None),
                                                  ('languages', langs),
+                                                 ('releases', 1),
                                                  ('season_number', self.video.season),
                                                  ('subs_per_page', 30),
                                                  ('type', 'tv'),
-                                                 ('comment', 1),
-                                                 ('releases', 1),
-                                                 ('bazarr', 1)),  # this argument filter incompatible image based or
+                                                 ('unpack', 1)),
+                                         timeout=30)
+            )
+
+            # For anime with absolute episode numbering, also search by absolute episode number
+            # so we can find subtitles that are only indexed by absolute number on subdl
+            absolute_episode = getattr(self.video, 'absolute_episode', None)
+            if absolute_episode and absolute_episode != self.video.episode:
+                logger.debug(f'Also searching by absolute episode number: {absolute_episode}')
+                res_absolute = self.checked(
+                    lambda: self.session.get(self.server_url() + 'subtitles',
+                                             params=(('api_key', self.api_key),
+                                                     ('bazarr', 1),  # this argument filters incompatible image-based or
                                          # txt subtitles
-                                         timeout=30),
-                amount=retry_amount,
-                retry_timeout=retry_timeout
+                                                     ('comment', 1),
+                                                     ('episode_number', absolute_episode),
+                                                     ('film_name', title if not imdb_id else None),
+                                                     ('imdb_id', imdb_id if imdb_id else None),
+                                                     ('languages', langs),
+                                                     ('releases', 1),
+                                                     ('subs_per_page', 30),
+                                                     ('type', 'tv'),
+                                                     ('unpack', 1)),
+                                             timeout=30)
+                )
+            else:
+                res_absolute = None
+
+            # Fallback: search by season only (no episode filter) to catch subtitles that use
+            # split-season / cour-based internal numbering (e.g. Fire Force S3 split into two cours
+            # where episode 25 is stored internally as cour-2 episode 13).
+            # The release name matching in get_matches() will identify the correct episode.
+            logger.debug(f'Also searching by season only (no episode filter) for season {self.video.season}')
+            res_season = self.checked(
+                lambda: self.session.get(self.server_url() + 'subtitles',
+                                         params=(('api_key', self.api_key),
+                                                 ('bazarr', 1),  # this argument filters incompatible image-based or
+                                         # txt subtitles
+                                                 ('comment', 1),
+                                                 ('film_name', title if not imdb_id else None),
+                                                 ('imdb_id', imdb_id if imdb_id else None),
+                                                 ('languages', langs),
+                                                 ('releases', 1),
+                                                 ('season_number', self.video.season),
+                                                 ('subs_per_page', 30),
+                                                 ('type', 'tv'),
+                                                 ('unpack', 1)),
+                                         timeout=30)
             )
         else:
+            res_absolute = None
+            res_season = None
             params = {
                        'api_key': self.api_key,
+                       'bazarr': 1,  # this argument filters incompatible image-based or txt subtitles
+                       'comment': 1,
                        'film_name': title if not imdb_id else None,
                        'imdb_id': imdb_id,
                        'languages': langs,
+                       'releases': 1,
                        'subs_per_page': 30,
                        'type': 'movie',
-                       'comment': 1,
-                       'releases': 1,
-                       'bazarr': 1
             }
-            res = self.retry(
+            res = self.checked(
                 lambda: self.session.get(self.server_url() + 'subtitles',
-                                         params=params, # this argument filter incompatible image based or
-                                         # txt subtitles
-                                         timeout=30),
-                amount=retry_amount,
-                retry_timeout=retry_timeout
+                                         params=params,
+                                         timeout=30)
             )
 
             # subdl also allows searching by TMDB ID, and some movies don't always
@@ -183,7 +248,7 @@ class SubdlProvider(ProviderRetryMixin, Provider):
             # if it's available for the movie.
             if res.status_code == 200:
                 # if the previous request with IMDb ID reported errors
-                res_data=res.json()
+                res_data = res.json()
 
                 if 'status' in res_data and not res_data['status']:
                     if not tmdb_id:
@@ -198,20 +263,11 @@ class SubdlProvider(ProviderRetryMixin, Provider):
                         params.pop('imdb_id', None)
                         params['tmdb_id']=tmdb_id
 
-                        res = self.retry(
+                        res = self.checked(
                             lambda: self.session.get(self.server_url() + 'subtitles',
                                                      params=params,
-                                                     timeout=30),
-                            amount=retry_amount,
-                            retry_timeout=retry_timeout
+                                                     timeout=30)
                         )
-
-        if res.status_code == 429:
-            raise APIThrottled("Too many requests")
-        elif res.status_code == 403:
-            raise ConfigurationError("Invalid API key")
-        elif res.status_code != 200:
-            res.raise_for_status()
 
         subtitles = []
 
@@ -219,37 +275,147 @@ class SubdlProvider(ProviderRetryMixin, Provider):
 
         if ('success' in result and not result['success']) or ('status' in result and not result['status']):
             logger.debug(result)
-            if 'error' in result:
-                error_msg = result['error']
-                if "can't find" in error_msg.lower():
-                    logger.debug(f"No subtitles found for {imdb_id or title}: {error_msg}")
-                    return subtitles
-                raise ProviderError(error_msg)
+            if 'error' in result and "can't find" in result['error'].lower():
+                logger.debug(f"No subtitles found for {imdb_id or title}: {result['error']}")
+            else:
+                logger.debug(f"Error while searching for subtitles: {result}")
+            return subtitles
 
-        logger.debug(f"Query returned {len(result['subtitles'])} subtitles")
+        # Merge absolute episode search results if available
+        all_items = list(result.get('subtitles', []))
+        seen_ids = {item['name'] for item in all_items}
 
-        if len(result['subtitles']):
-            for item in result['subtitles']:
-                if (isinstance(self.video, Episode) and
-                        item.get('episode_from', False) != item.get('episode_end', False)):
-                    # ignore season packs
-                    continue
-                else:
-                    subtitle = SubdlSubtitle(
-                        language=Language.fromsubdl(item['language']),
-                        forced=self._is_forced(item),
-                        hearing_impaired=item.get('hi', False) or self._is_hi(item),
-                        page_link=urljoin("https://subdl.com", item.get('subtitlePage', '')),
-                        download_link=item['url'],
-                        file_id=item['name'],
-                        release_names=item.get('releases', []),
-                        uploader=item.get('author', ''),
-                        season=item.get('season', None),
-                        episode=item.get('episode', None),
-                    )
-                    subtitle.get_matches(self.video)
-                    if subtitle.language in languages:  # make sure only desired subtitles variants are returned
-                        subtitles.append(subtitle)
+        if res_absolute and res_absolute.status_code == 200:
+            abs_result = res_absolute.json()
+            if ('success' in abs_result and abs_result['success']) or ('status' in abs_result and abs_result['status']):
+                for item in abs_result.get('subtitles', []):
+                    if item['name'] not in seen_ids:
+                        all_items.append(item)
+                        seen_ids.add(item['name'])
+                logger.debug(f'Absolute episode search added {len(abs_result.get("subtitles", []))} more subtitles')
+
+        if res_season and res_season.status_code == 200:
+            season_result = res_season.json()
+            if ('success' in season_result and season_result['success']) or ('status' in season_result and season_result['status']):
+                added = 0
+                for item in season_result.get('subtitles', []):
+                    if item['name'] not in seen_ids:
+                        all_items.append(item)
+                        seen_ids.add(item['name'])
+                        added += 1
+                logger.debug(f'Season-only search added {added} more subtitles')
+
+        # Last resort: if all season-filtered searches returned nothing, search by title only
+        # (no season/episode filter). This catches anime stored as season 0 on subdl (full series
+        # blocks) where season_number filtering silently excludes all results.
+        if not all_items and isinstance(self.video, Episode):
+            logger.debug('All season-filtered searches returned 0 results, falling back to title-only search')
+            res_title = self.checked(
+                lambda: self.session.get(self.server_url() + 'subtitles',
+                                         params=(('api_key', self.api_key),
+                                                 ('film_name', title if not imdb_id else None),
+                                                 ('imdb_id', imdb_id if imdb_id else None),
+                                                 ('languages', langs),
+                                                 ('subs_per_page', 30),
+                                                 ('type', 'tv'),
+                                                 ('comment', 1),
+                                                 ('releases', 1),
+                                                 ('unpack', 1),
+                                                 ('bazarr', 1)),  # this argument filters incompatible image-based
+                                         # or txt subtitles
+                                         timeout=30)
+            )
+            if res_title.status_code == 200:
+                title_result = res_title.json()
+                if ('success' in title_result and title_result['success']) or \
+                        ('status' in title_result and title_result['status']):
+                    added = 0
+                    for item in title_result.get('subtitles', []):
+                        if item['name'] not in seen_ids:
+                            all_items.append(item)
+                            seen_ids.add(item['name'])
+                            added += 1
+                    logger.debug(f'Title-only fallback search added {added} subtitles')
+
+        logger.debug(f"Query returned {len(all_items)} subtitles")
+
+        absolute_episode = getattr(self.video, 'absolute_episode', None)
+
+        if len(all_items):
+            for item in all_items:
+                is_pack = False
+                is_direct_file = False
+                download_link = item['url']
+                file_id = item['name']
+                item_season = item.get('season', None)
+                item_episode = item.get('episode', None)
+                if isinstance(self.video, Episode):
+                    ep_from = item.get('episode_from')
+                    ep_end = item.get('episode_end')
+                    # Fallback: parse episode range from release names when the API
+                    # does not provide episode_from/episode_end fields.
+                    if not (ep_from and ep_end and ep_from != ep_end):
+                        ep_from_parsed, ep_end_parsed = self._parse_episode_range_from_releases(
+                            item.get('releases', [])
+                        )
+                        if ep_from_parsed and ep_end_parsed and ep_from_parsed != ep_end_parsed:
+                            ep_from = ep_from_parsed
+                            ep_end = ep_end_parsed
+                            logger.debug(
+                                f'Parsed episode range {ep_from}-{ep_end} from release names'
+                            )
+                    if ep_from and ep_end and ep_from != ep_end:
+                        # Multi-episode pack: allow if target episode is within range
+                        target_ep = self.video.episode
+                        if absolute_episode:
+                            # Check both standard and absolute episode against the range
+                            if not ((ep_from <= target_ep <= ep_end) or
+                                    (ep_from <= absolute_episode <= ep_end)):
+                                continue
+                        else:
+                            if not (ep_from <= target_ep <= ep_end):
+                                continue
+                        is_pack = True
+
+                        # Prefer direct unpacked file when the API exposes one matching
+                        # the target episode (unpack=1). This avoids downloading the whole
+                        # season ZIP just to extract a single subtitle.
+                        unpack_entry = next(
+                            (f for f in item.get('unpack_files', [])
+                             if f.get('episode') == self.video.episode
+                             or (absolute_episode and f.get('episode') == absolute_episode)),
+                            None
+                        )
+                        if unpack_entry:
+                            download_link = unpack_entry['url']
+                            file_id = f"{item['name']}/{unpack_entry['file_n_id']}"
+                            item_season = unpack_entry.get('season', item_season)
+                            item_episode = unpack_entry.get('episode', item_episode)
+                            is_pack = False
+                            is_direct_file = True
+                            logger.debug(
+                                f'Using unpacked file {unpack_entry["name"]} for episode '
+                                f'{item_episode} instead of pack {item["name"]}'
+                            )
+
+                subtitle = SubdlSubtitle(
+                    language=Language.fromsubdl(item['language']),
+                    forced=self._is_forced(item),
+                    hearing_impaired=item.get('hi', False) or self._is_hi(item),
+                    page_link=urljoin("https://subdl.com", item.get('subtitlePage', '')),
+                    download_link=download_link,
+                    file_id=file_id,
+                    release_names=item.get('releases', []),
+                    uploader=item.get('author', ''),
+                    season=item_season,
+                    episode=item_episode,
+                    absolute_episode=absolute_episode,
+                    is_pack=is_pack,
+                    is_direct_file=is_direct_file,
+                )
+                subtitle.get_matches(self.video)
+                if subtitle.language in languages:  # make sure only desired subtitles variants are returned
+                    subtitles.append(subtitle)
 
         return subtitles
 
@@ -286,6 +452,23 @@ class SubdlProvider(ProviderRetryMixin, Provider):
         # nothing match so we consider it as normal subtitles
         return False
 
+    @staticmethod
+    def _parse_episode_range_from_releases(release_names):
+        """Parse episode range (ep_from, ep_end) from release name strings.
+
+        Used as a fallback when the subdl API does not populate episode_from/
+        episode_end for a pack. Guessit expands patterns like 'EP0264-0336'
+        into a list of integers; we extract the first and last as the range.
+
+        Returns (ep_from, ep_end) as ints, or (None, None) if not found.
+        """
+        for name in release_names:
+            guess = guessit(name, {'type': 'episode'})
+            ep = guess.get('episode')
+            if isinstance(ep, list) and len(ep) >= 2:
+                return ep[0], ep[-1]
+        return None, None
+
     def list_subtitles(self, video, languages):
         return self.query(languages, video)
 
@@ -293,18 +476,9 @@ class SubdlProvider(ProviderRetryMixin, Provider):
         logger.debug('Downloading subtitle %r', subtitle)
         download_link = urljoin("https://dl.subdl.com", subtitle.download_link)
 
-        r = self.retry(
-            lambda: self.session.get(download_link, timeout=30),
-            amount=retry_amount,
-            retry_timeout=retry_timeout
+        r = self.checked(
+            lambda: self.session.get(download_link, timeout=30)
         )
-
-        if r.status_code == 429 or (r.status_code == 500 and r.text == 'Download limit exceeded'):
-            raise DownloadLimitExceeded("Daily download limit exceeded")
-        elif r.status_code == 403:
-            raise ConfigurationError("Invalid API key")
-        elif r.status_code != 200:
-            r.raise_for_status()
 
         if not r:
             logger.error(f'Could not download subtitle from {download_link}')
@@ -314,12 +488,107 @@ class SubdlProvider(ProviderRetryMixin, Provider):
             archive_stream = io.BytesIO(r.content)
             if is_zipfile(archive_stream):
                 archive = ZipFile(archive_stream)
-                for name in archive.namelist():
-                    # TODO when possible, deal with season pack / multiple files archive
-                    subtitle_content = archive.read(name)
-                    subtitle.content = fix_line_ending(subtitle_content)
-                    return
+                if subtitle.is_pack and self.video and isinstance(self.video, Episode):
+                    # Use smart extraction for packs: match by episode number
+                    target_episode = self.video.episode
+                    absolute_episode = getattr(self.video, 'absolute_episode', None)
+                    content = utils.get_subtitle_from_archive(
+                        archive,
+                        episode=target_episode,
+                        episode_title=getattr(self.video, 'title', None),
+                    )
+                    # Fallback: try absolute episode number
+                    if content is None and absolute_episode:
+                        content = utils.get_subtitle_from_archive(
+                            archive,
+                            episode=absolute_episode,
+                        )
+                    if content is not None:
+                        subtitle.content = content
+                    else:
+                        logger.warning(f'Could not find episode {target_episode} in pack archive {download_link}')
+                        subtitle.content = None
+                else:
+                    # Single episode: prefer subtitle file extensions, fallback to first file
+                    for name in archive.namelist():
+                        if name.endswith(('.srt', '.sub', '.ssa', '.ass')):
+                            subtitle.content = fix_line_ending(archive.read(name))
+                            return
+                    for name in archive.namelist():
+                        subtitle.content = fix_line_ending(archive.read(name))
+                        return
+            elif subtitle.is_direct_file:
+                # subdl unpack=1: response is a raw subtitle file, not a ZIP
+                subtitle.content = fix_line_ending(r.content)
             else:
                 logger.error(f'Could not unzip subtitle from {download_link}')
                 subtitle.content = None
                 return
+
+    def checked(self, fn: Callable, is_retry: bool = False, retry_attempt=0) -> Response:
+        """
+        Executes a given callable and handles API-related errors, including authentication errors, rate limits,
+        and service busy scenarios. The method will ensure proper handling of retries and logging for recoverable
+        errors or failures.
+
+        :param fn: The callable to execute, expected to return a Response object.
+        :type fn: Callable
+        :param is_retry: Indicates whether the current execution is a retry attempt. Defaults to False.
+        :type is_retry: bool, optional
+        :param retry_attempt: The number of retry attempts made for handling "service_busy" errors. Defaults to 0.
+        :type retry_attempt: int, optional
+        :return: The HTTP response object returned by the callable upon success.
+        :rtype: Response
+        :raises ProviderError: If a non-recoverable error or unhandled exception occurs.
+        :raises AuthenticationError: If the API key is invalid with a 403 response code.
+        :raises DownloadLimitExceeded: If the daily download limit is exceeded.
+        :raises APIThrottled: If the API request rate limit is hit and retries are exhausted.
+        """
+        response = None
+        try:
+            response = fn()
+        except Exception:
+            logger.exception('Unhandled exception raised.')
+            raise
+        else:
+            status_code = response.status_code
+            if status_code == 403:
+                raise AuthenticationError("Invalid API key")
+            elif status_code == 404:
+                raise ProviderError("Resource not found")
+            elif status_code == 429:
+                try:
+                    payload = response.json()
+                except Exception:
+                    logger.exception('Failed to parse JSON response')
+                else:
+                    if isinstance(payload, dict) and 'error' in payload:
+                        if payload['error'] in ['daily_limit', 'api_download_limit_exceeded']:
+                            raise DownloadLimitExceeded("Daily download limit exceeded")
+                        elif payload['error'] == 'rate_limit':
+                            if not is_retry:
+                                logger.debug("API request rate limit hit, waiting and trying again once.")
+                                retry_delay = response.headers.get('Retry-After', 15)
+                                logger.debug(f"Retry delay: {retry_delay} seconds")
+                                time.sleep(int(retry_delay))
+                                logger.debug("Retrying API request")
+                                return self.checked(fn, is_retry=True)
+                            raise APIThrottled("API request limit hit")
+                        elif payload['error'] == 'service_busy':
+                            if retry_attempt < 5:
+                                logger.debug("API service is busy, waiting and trying again once.")
+                                retry_delay = response.headers.get('Retry-After', 5)
+                                logger.debug(f"Service busy retry delay: {retry_delay} seconds")
+                                time.sleep(int(retry_delay))
+                                logger.debug("Retrying service busy API request")
+                                return self.checked(fn, retry_attempt=retry_attempt + 1)
+                            else:
+                                raise ProviderError("API service is busy")
+                    else:
+                        logger.exception(f'Missing error field in JSON response: {payload}')
+                        response.raise_for_status()
+            elif status_code != 200:
+                logger.exception('Unhandled API response')
+                response.raise_for_status()
+
+        return response

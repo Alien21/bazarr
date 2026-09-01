@@ -1,17 +1,21 @@
-from typing import Dict, Type
+from typing import Type
 
 from .base import FormatBase
 from .microdvd import MicroDVDFormat
+from .sami import SAMIFormat
 from .subrip import SubripFormat
 from .jsonformat import JSONFormat
 from .substation import SubstationFormat
 from .mpl2 import MPL2Format
 from .tmp import TmpFormat
+from .ttml import TTMLFormat
 from .webvtt import WebVTTFormat
+from .whisper import WhisperJAXFormat
 from ..exceptions import UnknownFormatIdentifierError, UnknownFileExtensionError, FormatAutodetectionError
 
+
 #: Dict mapping file extensions to format identifiers.
-FILE_EXTENSION_TO_FORMAT_IDENTIFIER: Dict[str, str] = {
+FILE_EXTENSION_TO_FORMAT_IDENTIFIER: dict[str, str] = {
     ".srt": "srt",
     ".ass": "ass",
     ".ssa": "ssa",
@@ -19,10 +23,13 @@ FILE_EXTENSION_TO_FORMAT_IDENTIFIER: Dict[str, str] = {
     ".json": "json",
     ".txt": "tmp",
     ".vtt": "vtt",
+    ".sami": "sami",
+    ".smi": "sami",
+    ".ttml": "ttml",
 }
 
 #: Dict mapping format identifiers to implementations (FormatBase subclasses).
-FORMAT_IDENTIFIER_TO_FORMAT_CLASS: Dict[str, Type[FormatBase]] = {
+FORMAT_IDENTIFIER_TO_FORMAT_CLASS: dict[str, Type[FormatBase]] = {
     "srt": SubripFormat,
     "ass": SubstationFormat,
     "ssa": SubstationFormat,
@@ -31,6 +38,9 @@ FORMAT_IDENTIFIER_TO_FORMAT_CLASS: Dict[str, Type[FormatBase]] = {
     "mpl2": MPL2Format,
     "tmp": TmpFormat,
     "vtt": WebVTTFormat,
+    "sami": SAMIFormat,
+    "whisper_jax": WhisperJAXFormat,
+    "ttml": TTMLFormat,
 }
 
 FORMAT_IDENTIFIERS = list(FORMAT_IDENTIFIER_TO_FORMAT_CLASS.keys())

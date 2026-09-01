@@ -7,7 +7,8 @@ import ast
 from flask_restx import Resource, Namespace, reqparse, fields, marshal
 from functools import reduce
 
-from app.database import TableMovies, TableHistoryMovie, TableBlacklistMovie, database, select, func
+from app.database import (TableMovies, TableHistoryMovie, TableBlacklistMovie, database, select, func,
+                          TableMoviesSubtitles)
 from subtitles.upgrade import get_upgradable_movies_subtitles, _language_still_desired
 from api.swaggerui import subtitles_language_model
 
@@ -80,6 +81,7 @@ class MoviesHistory(Resource):
                       TableHistoryMovie.language,
                       TableMovies.tags,
                       TableHistoryMovie.score,
+                      TableHistoryMovie.score_out_of,
                       TableHistoryMovie.subs_id,
                       TableHistoryMovie.provider,
                       TableHistoryMovie.subtitles_path,
@@ -87,13 +89,16 @@ class MoviesHistory(Resource):
                       TableHistoryMovie.matched,
                       TableHistoryMovie.not_matched,
                       TableMovies.profileId,
-                      TableMovies.subtitles.label('external_subtitles'),
+                      TableMoviesSubtitles.path.label('external_subtitles'),
                       blacklisted_subtitles.c.subs_id.label('blacklisted')) \
             .select_from(TableHistoryMovie) \
             .join(TableMovies) \
+            .join(TableMoviesSubtitles,
+                  onclause=TableHistoryMovie.radarrId == TableMoviesSubtitles.radarrId) \
             .join(blacklisted_subtitles, onclause=TableHistoryMovie.subs_id == blacklisted_subtitles.c.subs_id,
                   isouter=True) \
             .where(reduce(operator.and_, query_conditions)) \
+            .where(TableMoviesSubtitles.path.is_not(None)) \
             .order_by(TableHistoryMovie.timestamp.desc())
         if length > 0:
             stmt = stmt.limit(length).offset(start)
@@ -110,13 +115,14 @@ class MoviesHistory(Resource):
             'profileId': x.profileId,
             'tags': x.tags,
             'score': x.score,
+            'score_out_of': x.score_out_of,
             'subs_id': x.subs_id,
             'provider': x.provider,
             'subtitles_path': x.subtitles_path,
             'video_path': x.video_path,
             'matches': x.matched,
             'dont_matches': x.not_matched,
-            'external_subtitles': [y[1] for y in ast.literal_eval(x.external_subtitles) if y[1]],
+            'external_subtitles': x.external_subtitles,
             'blacklisted': bool(x.blacklisted),
         } for x in database.execute(stmt).all()]
 
@@ -135,7 +141,7 @@ class MoviesHistory(Resource):
 
             # Mark not upgradable if video/subtitles file doesn't exist anymore or if language isn't desired anymore
             if item['upgradable']:
-                if (item['subtitles_path'] not in item['external_subtitles'] or item['video_path'] != item['path'] or
+                if (item['subtitles_path'] != item['external_subtitles'] or item['video_path'] != item['path'] or
                         not still_desired):
                     item.update({"upgradable": False})
 
@@ -145,7 +151,7 @@ class MoviesHistory(Resource):
             del item['profileId']
 
             if item['score']:
-                item['score'] = f"{round((int(item['score']) * 100 / 120), 2)}%"
+                item['score'] = f"{round((int(item['score']) * 100 / item['score_out_of']), 2)}%"
 
             # Make timestamp pretty
             if item['timestamp']:

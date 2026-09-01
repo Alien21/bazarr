@@ -64,7 +64,7 @@ class RegistrableExtensionManager(ExtensionManager):
         if ep.name in self.names():
             raise ValueError('An extension with the same name already exist')
 
-        ext = self._load_one_plugin(ep, False, (), {}, False)
+        ext = self._load_one_plugin(ep, False, (), {})
         self.extensions.append(ext)
         if self._extensions_by_name is not None:
             self._extensions_by_name[ext.name] = ext
@@ -103,7 +103,6 @@ def parse_entry_point(src: str, group: str) -> EntryPoint:
 #: Provider manager
 provider_manager = RegistrableExtensionManager('subliminal.providers', [
     'addic7ed = subliminal.providers.addic7ed:Addic7edProvider',
-    'podnapisi = subliminal.providers.podnapisi:PodnapisiProvider',
     'shooter = subliminal.providers.shooter:ShooterProvider',
     'thesubdb = subliminal.providers.thesubdb:TheSubDBProvider',
     'tvsubtitles = subliminal.providers.tvsubtitles:TVsubtitlesProvider'

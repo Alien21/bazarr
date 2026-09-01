@@ -1,4 +1,3 @@
-/* eslint-disable @typescript-eslint/no-empty-interface */
 interface Settings {
   general: Settings.General;
   log: Settings.Log;
@@ -13,6 +12,7 @@ interface Settings {
   // Anitcaptcha
   anticaptcha: Settings.Anticaptcha;
   deathbycaptcha: Settings.DeathByCaptche;
+  captchaai: Settings.CaptchaAI;
   // Providers
   opensubtitlescom: Settings.OpenSubtitlesCom;
   addic7ed: Settings.Addic7ed;
@@ -181,8 +181,9 @@ declare namespace Settings {
 
   interface Translator {
     default_score: number;
-    gemini_key: string;
+    gemini_keys: string[];
     gemini_model: string;
+    gemini_batch_size: number;
     lingarr_url: string;
     lingarr_token: string;
     translator_info: boolean;
@@ -214,6 +215,10 @@ declare namespace Settings {
   interface DeathByCaptche {
     username?: string;
     password?: string;
+  }
+
+  interface CaptchaAI {
+    captchaai_key?: string;
   }
 
   // Providers

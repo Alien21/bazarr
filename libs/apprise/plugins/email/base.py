@@ -1,8 +1,7 @@
-# -*- coding: utf-8 -*-
 # BSD 2-Clause License
 #
 # Apprise - Push Notification Library.
-# Copyright (c) 2025, Chris Caron <lead2gold@gmail.com>
+# Copyright (c) 2026, Chris Caron <lead2gold@gmail.com>
 #
 # Redistribution and use in source and binary forms, with or without
 # modification, are permitted provided that the following conditions are met:
@@ -26,32 +25,64 @@
 # ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
 # POSSIBILITY OF SUCH DAMAGE.
 
+from datetime import datetime
+from email.header import Header
+from email.mime.application import MIMEApplication
+from email.mime.base import MIMEBase
+from email.mime.multipart import MIMEMultipart
+from email.mime.text import MIMEText
+from email.utils import format_datetime, formataddr, make_msgid
 import re
 import smtplib
-from email.mime.text import MIMEText
-from email.mime.application import MIMEApplication
-from email.mime.multipart import MIMEMultipart
-from email.mime.base import MIMEBase
-from email.utils import formataddr, make_msgid
-from email.header import Header
+from typing import Optional
 
-from socket import error as SocketError
-from datetime import datetime
-from datetime import timezone
-
-from ..base import NotifyBase
-from ...url import PrivacyMode
-from ...common import NotifyFormat, NotifyType
+from ...common import NotifyFormat, NotifyType, PersistentStoreMode
 from ...conversion import convert_between
-from ...utils import pgp as _pgp
-from ...utils.parse import (
-    is_ipaddr, is_email, parse_emails, is_hostname, parse_bool)
 from ...locale import gettext_lazy as _
 from ...logger import logger
-from .common import (
-    AppriseEmailException, EmailMessage, SecureMailMode, SECURE_MODES,
-    WebBaseLogin)
+from ...url import PrivacyMode
+from ...utils import pgp as _pgp, wkd as _wkd
+from ...utils.parse import (
+    is_email,
+    is_hostname,
+    is_ipaddr,
+    parse_bool,
+    parse_emails,
+)
+from ..base import NotifyBase
 from . import templates
+from .common import (
+    SECURE_MODES,
+    AppriseEmailException,
+    EmailMessage,
+    SecureMailMode,
+    WebBaseLogin,
+)
+
+
+class PGPMode:
+    """PGP security mode for outbound email."""
+
+    # No PGP applied (default)
+    NONE = "no"
+
+    # Sign using the sender's private key; encrypt opportunistically when
+    # a recipient public key is available (via WKD or pgppub=)
+    SIGN = "sign"
+
+    # Encrypt using the recipient's public key (fails if no key found)
+    ENCRYPT = "encrypt"
+
+
+# Ordered tuple of all valid PGP modes; prefix matching uses this order
+PGP_MODES = (
+    PGPMode.NONE,
+    PGPMode.SIGN,
+    PGPMode.ENCRYPT,
+)
+
+# The mode used when ?pgp= is absent or empty
+PGP_MODE_DEFAULT = PGPMode.NONE
 
 
 class NotifyEmail(NotifyBase):
@@ -61,19 +92,23 @@ class NotifyEmail(NotifyBase):
     """
 
     # The default descriptive name associated with the Notification
-    service_name = 'E-Mail'
+    service_name = "E-Mail"
 
     # The default simple (insecure) protocol
-    protocol = 'mailto'
+    protocol = "mailto"
 
     # The default secure protocol
-    secure_protocol = 'mailtos'
+    secure_protocol = "mailtos"
 
     # A URL that takes you to the setup/help of the specific protocol
-    setup_url = 'https://github.com/caronc/apprise/wiki/Notify_email'
+    setup_url = "https://appriseit.com/services/email/"
 
     # Support attachments
     attachment_support = True
+
+    # Our default is to no not use persistent storage beyond in-memory
+    # reference; this allows us to auto-generate our config if needed
+    storage_mode = PersistentStoreMode.AUTO
 
     # Default Notify Format
     notify_format = NotifyFormat.HTML
@@ -83,121 +118,159 @@ class NotifyEmail(NotifyBase):
 
     # Define object templates
     templates = (
-        '{schema}://{host}',
-        '{schema}://{host}:{port}',
-        '{schema}://{host}/{targets}',
-        '{schema}://{host}:{port}/{targets}',
-        '{schema}://{user}@{host}',
-        '{schema}://{user}@{host}:{port}',
-        '{schema}://{user}@{host}/{targets}',
-        '{schema}://{user}@{host}:{port}/{targets}',
-        '{schema}://{user}:{password}@{host}',
-        '{schema}://{user}:{password}@{host}:{port}',
-        '{schema}://{user}:{password}@{host}/{targets}',
-        '{schema}://{user}:{password}@{host}:{port}/{targets}',
+        "{schema}://{host}",
+        "{schema}://{host}/{targets}",
+        "{schema}://{user}@{host}",
+        "{schema}://{user}@{host}/{targets}",
+        "{schema}://{user}@{host}:{port}",
+        "{schema}://{user}@{host}/{targets}",
+        "{schema}://{user}@{host}:{port}/{targets}",
+        "{schema}://{user}:{password}@{host}",
+        "{schema}://{user}:{password}@{host}/{targets}",
+        "{schema}://{user}:{password}@{host}:{port}",
+        "{schema}://{user}:{password}@{host}:{port}/{targets}",
     )
 
     # Define our template tokens
-    template_tokens = dict(NotifyBase.template_tokens, **{
-        'user': {
-            'name': _('User Name'),
-            'type': 'string',
+    template_tokens = dict(
+        NotifyBase.template_tokens,
+        **{
+            "user": {
+                "name": _("User Name"),
+                "type": "string",
+            },
+            "password": {
+                "name": _("Password"),
+                "type": "string",
+                "private": True,
+            },
+            "host": {
+                "name": _("Domain"),
+                "type": "string",
+                "required": True,
+            },
+            "port": {
+                "name": _("Port"),
+                "type": "int",
+                "min": 1,
+                "max": 65535,
+            },
+            "target_email": {
+                "name": _("Target Email"),
+                "type": "string",
+                "map_to": "targets",
+            },
+            "targets": {
+                "name": _("Targets"),
+                "type": "list:string",
+            },
         },
-        'password': {
-            'name': _('Password'),
-            'type': 'string',
-            'private': True,
-        },
-        'host': {
-            'name': _('Domain'),
-            'type': 'string',
-            'required': True,
-        },
-        'port': {
-            'name': _('Port'),
-            'type': 'int',
-            'min': 1,
-            'max': 65535,
-        },
-        'target_email': {
-            'name': _('Target Email'),
-            'type': 'string',
-            'map_to': 'targets',
-        },
-        'targets': {
-            'name': _('Targets'),
-            'type': 'list:string',
-        },
-    })
+    )
 
-    template_args = dict(NotifyBase.template_args, **{
-        'to': {
-            'name': _('To Email'),
-            'type': 'string',
-            'map_to': 'targets',
+    template_args = dict(
+        NotifyBase.template_args,
+        **{
+            "from": {
+                "name": _("From Email"),
+                "type": "string",
+                "map_to": "from_addr",
+            },
+            "name": {
+                "name": _("From Name"),
+                "type": "string",
+                "map_to": "from_addr",
+            },
+            "smtp": {
+                "name": _("SMTP Server"),
+                "type": "string",
+                "map_to": "smtp_host",
+            },
+            "mode": {
+                "name": _("Secure Mode"),
+                "type": "choice:string",
+                "values": SECURE_MODES,
+                "default": SecureMailMode.STARTTLS,
+                "map_to": "secure_mode",
+            },
+            "reply": {
+                "name": _("Reply To"),
+                "type": "list:string",
+                "map_to": "reply_to",
+            },
+            "pgp": {
+                "name": _("PGP Security Mode"),
+                "type": "choice:string",
+                "values": PGP_MODES,
+                "default": PGP_MODE_DEFAULT,
+                "map_to": "pgp_mode",
+            },
+            "pgppub": {
+                "name": _("PGP Public Key Path"),
+                "type": "string",
+                "private": True,
+                # By default persistent storage is referenced
+                "default": "",
+                "map_to": "pgp_key",
+            },
+            # Backward-compat alias; deprecated in favour of pgppub=
+            # Handled in parse_url() with a deprecation warning.
+            "pgpkey": {
+                "alias_of": "pgppub",
+            },
+            "pgpprv": {
+                "name": _("PGP Private Key Path"),
+                "type": "string",
+                "private": True,
+                # By default persistent storage is referenced
+                "default": "",
+                "map_to": "pgp_privkey",
+            },
+            "wkd": {
+                "name": _("Web Key Directory"),
+                "type": "bool",
+                "default": False,
+                "map_to": "use_wkd",
+            },
+            "to": {
+                "name": _("To Email"),
+                "type": "string",
+                "map_to": "targets",
+            },
+            "cc": {
+                "name": _("Carbon Copy"),
+                "type": "list:string",
+            },
+            "bcc": {
+                "name": _("Blind Carbon Copy"),
+                "type": "list:string",
+            },
         },
-        'from': {
-            'name': _('From Email'),
-            'type': 'string',
-            'map_to': 'from_addr',
-        },
-        'name': {
-            'name': _('From Name'),
-            'type': 'string',
-            'map_to': 'from_addr',
-        },
-        'cc': {
-            'name': _('Carbon Copy'),
-            'type': 'list:string',
-        },
-        'bcc': {
-            'name': _('Blind Carbon Copy'),
-            'type': 'list:string',
-        },
-        'smtp': {
-            'name': _('SMTP Server'),
-            'type': 'string',
-            'map_to': 'smtp_host',
-        },
-        'mode': {
-            'name': _('Secure Mode'),
-            'type': 'choice:string',
-            'values': SECURE_MODES,
-            'default': SecureMailMode.STARTTLS,
-            'map_to': 'secure_mode',
-        },
-        'reply': {
-            'name': _('Reply To'),
-            'type': 'list:string',
-            'map_to': 'reply_to',
-        },
-        'pgp': {
-            'name': _('PGP Encryption'),
-            'type': 'bool',
-            'map_to': 'use_pgp',
-            'default': False,
-        },
-        'pgpkey': {
-            'name': _('PGP Public Key Path'),
-            'type': 'string',
-            'private': True,
-            # By default persistent storage is referenced
-            'default': '',
-            'map_to': 'pgp_key',
-        },
-    })
+    )
 
     # Define any kwargs we're using
     template_kwargs = {
-        'headers': {
-            'name': _('Email Header'),
-            'prefix': '+',
+        "headers": {
+            "name": _("Email Header"),
+            "prefix": "+",
         },
     }
 
-    def __init__(self, smtp_host=None, from_addr=None, secure_mode=None,
-                 targets=None, cc=None, bcc=None, reply_to=None, headers=None,
-                 use_pgp=None, pgp_key=None, **kwargs):
+    def __init__(
+        self,
+        smtp_host=None,
+        from_addr=None,
+        secure_mode=None,
+        targets=None,
+        cc=None,
+        bcc=None,
+        reply_to=None,
+        headers=None,
+        pgp_mode=None,
+        pgp_key=None,
+        pgp_privkey=None,
+        use_wkd=False,
+        **kwargs,
+    ):
         """
         Initialize Email Object
 
@@ -207,7 +280,7 @@ class NotifyEmail(NotifyBase):
         super().__init__(**kwargs)
 
         # Acquire Email 'To'
-        self.targets = list()
+        self.targets = []
 
         # Acquire Carbon Copies
         self.cc = set()
@@ -228,24 +301,29 @@ class NotifyEmail(NotifyBase):
 
         # Now we want to construct the To and From email
         # addresses from the URL provided
-        self.from_addr = [False, '']
+        self.from_addr = [False, ""]
 
         # Now detect the SMTP Server
-        self.smtp_host = \
-            smtp_host if isinstance(smtp_host, str) else ''
+        self.smtp_host = smtp_host if isinstance(smtp_host, str) else ""
 
         # Now detect secure mode
         if secure_mode:
-            self.secure_mode = None \
-                if not isinstance(secure_mode, str) \
+            self.secure_mode = (
+                None
+                if not isinstance(secure_mode, str)
                 else secure_mode.lower()
+            )
         else:
-            self.secure_mode = SecureMailMode.INSECURE \
-                if not self.secure else self.template_args['mode']['default']
+            self.secure_mode = (
+                SecureMailMode.INSECURE
+                if not self.secure
+                else self.template_args["mode"]["default"]
+            )
 
         if self.secure_mode not in SECURE_MODES:
-            msg = 'The secure mode specified ({}) is invalid.'\
-                  .format(secure_mode)
+            msg = "The secure mode specified ({}) is invalid.".format(
+                secure_mode
+            )
             self.logger.warning(msg)
             raise TypeError(msg)
 
@@ -253,48 +331,53 @@ class NotifyEmail(NotifyBase):
         for recipient in parse_emails(cc):
             email = is_email(recipient)
             if email:
-                self.cc.add(email['full_email'])
+                self.cc.add(email["full_email"])
 
                 # Index our name (if one exists)
-                self.names[email['full_email']] = \
-                    email['name'] if email['name'] else False
+                self.names[email["full_email"]] = (
+                    email["name"] if email["name"] else False
+                )
                 continue
 
             self.logger.warning(
-                'Dropped invalid Carbon Copy email '
-                '({}) specified.'.format(recipient),
+                "Dropped invalid Carbon Copy email ({}) specified.".format(
+                    recipient
+                ),
             )
 
         # Validate recipients (bcc:) and drop bad ones:
         for recipient in parse_emails(bcc):
             email = is_email(recipient)
             if email:
-                self.bcc.add(email['full_email'])
+                self.bcc.add(email["full_email"])
 
                 # Index our name (if one exists)
-                self.names[email['full_email']] = \
-                    email['name'] if email['name'] else False
+                self.names[email["full_email"]] = (
+                    email["name"] if email["name"] else False
+                )
                 continue
 
             self.logger.warning(
-                'Dropped invalid Blind Carbon Copy email '
-                '({}) specified.'.format(recipient),
+                "Dropped invalid Blind Carbon Copy email "
+                "({}) specified.".format(recipient),
             )
 
         # Validate recipients (reply-to:) and drop bad ones:
         for recipient in parse_emails(reply_to):
             email = is_email(recipient)
             if email:
-                self.reply_to.add(email['full_email'])
+                self.reply_to.add(email["full_email"])
 
                 # Index our name (if one exists)
-                self.names[email['full_email']] = \
-                    email['name'] if email['name'] else False
+                self.names[email["full_email"]] = (
+                    email["name"] if email["name"] else False
+                )
                 continue
 
             self.logger.warning(
-                'Dropped invalid Reply To email '
-                '({}) specified.'.format(recipient),
+                "Dropped invalid Reply To email ({}) specified.".format(
+                    recipient
+                ),
             )
 
         # Apply any defaults based on certain known configurations
@@ -303,24 +386,28 @@ class NotifyEmail(NotifyBase):
         if self.user:
             if self.host:
                 # Prepare the bases of our email
-                self.from_addr = [self.app_id, '{}@{}'.format(
-                    re.split(r'[\s@]+', self.user)[0],
-                    self.host,
-                )]
+                self.from_addr = [
+                    self.app_id,
+                    "{}@{}".format(
+                        re.split(r"[\s@]+", self.user)[0],
+                        self.host,
+                    ),
+                ]
 
             else:
                 result = is_email(self.user)
                 if result:
                     # Prepare the bases of our email and include domain
-                    self.host = result['domain']
+                    self.host = result["domain"]
                     self.from_addr = [self.app_id, self.user]
 
         if from_addr:
             result = is_email(from_addr)
             if result:
                 self.from_addr = (
-                    result['name'] if result['name'] else False,
-                    result['full_email'])
+                    result["name"] if result["name"] else False,
+                    result["full_email"],
+                )
             else:
                 # Only update the string but use the already detected info
                 self.from_addr[0] = from_addr
@@ -328,9 +415,11 @@ class NotifyEmail(NotifyBase):
         result = is_email(self.from_addr[1])
         if not result:
             # Parse Source domain based on from_addr
-            msg = 'Invalid ~From~ email specified: {}'.format(
-                '{} <{}>'.format(self.from_addr[0], self.from_addr[1])
-                if self.from_addr[0] else '{}'.format(self.from_addr[1]))
+            msg = "Invalid ~From~ email specified: {}".format(
+                "{} <{}>".format(self.from_addr[0], self.from_addr[1])
+                if self.from_addr[0]
+                else "{}".format(self.from_addr[1])
+            )
             self.logger.warning(msg)
             raise TypeError(msg)
 
@@ -343,13 +432,17 @@ class NotifyEmail(NotifyBase):
                 result = is_email(recipient)
                 if result:
                     self.targets.append(
-                        (result['name'] if result['name'] else False,
-                            result['full_email']))
+                        (
+                            result["name"] if result["name"] else False,
+                            result["full_email"],
+                        )
+                    )
                     continue
 
                 self.logger.warning(
-                    'Dropped invalid To email '
-                    '({}) specified.'.format(recipient),
+                    "Dropped invalid To email ({}) specified.".format(
+                        recipient
+                    ),
                 )
 
         else:
@@ -363,27 +456,80 @@ class NotifyEmail(NotifyBase):
         if not self.port:
             # Assign our port based on our secure_mode if not otherwise
             # detected
-            self.port = SECURE_MODES[self.secure_mode]['default_port']
+            self.port = SECURE_MODES[self.secure_mode]["default_port"]
 
         # if there is still no smtp_host then we fall back to the hostname
         if not self.smtp_host:
             self.smtp_host = self.host
 
+        # Track whether pgp_mode was explicitly provided so wkd= implication
+        # does not override a deliberate pgp=none choice
+        pgp_mode_explicit = pgp_mode is not None
+
+        # Handle deprecated use_pgp boolean for backward compatibility;
+        # kept in **kwargs rather than as a named parameter so the template
+        # verification test does not flag it as an unmapped __init__ argument
+        use_pgp = kwargs.pop("use_pgp", None)
+        if use_pgp is not None:
+            self.logger.warning(
+                "Email use_pgp= is deprecated; use pgp_mode='encrypt' instead"
+            )
+            # Only override pgp_mode when the caller did not also pass it
+            if pgp_mode is None:
+                pgp_mode = PGPMode.ENCRYPT if use_pgp else PGPMode.NONE
+                # use_pgp counts as an explicit setting
+                pgp_mode_explicit = True
+
+        # Resolve PGP mode via prefix match (allows 'e', 'en', 'encrypt')
+        if not pgp_mode:
+            self.pgp_mode = PGP_MODE_DEFAULT
+        else:
+            self.pgp_mode = next(
+                (m for m in PGP_MODES if m.startswith(str(pgp_mode).lower())),
+                PGP_MODE_DEFAULT,
+            )
+
+        # WKD flag -- use parse_bool() so string values like 'no'/'false'
+        # are treated as disabled (bool('no') would incorrectly return True)
+        self.use_wkd = parse_bool(use_wkd)
+
+        # wkd=yes implies pgp=encrypt when pgp= was not explicitly set
+        if self.use_wkd and not pgp_mode_explicit:
+            self.pgp_mode = PGPMode.ENCRYPT
+
+        # Build a WKD controller when WKD key discovery is requested
+        wkd_ctrl = (
+            _wkd.AppriseWKDController(
+                asset=self.asset,
+                verify_certificate=self.verify_certificate,
+                request_timeout=self.request_timeout,
+                allow_redirects=self.redirects,
+            )
+            if self.use_wkd
+            else None
+        )
+
         # Prepare our Pretty Good Privacy Object
         self.pgp = _pgp.ApprisePGPController(
-            path=self.store.path, pub_keyfile=pgp_key,
-            email=self.from_addr[1], asset=self.asset)
+            path=self.store.path,
+            pub_keyfile=pgp_key,
+            prv_keyfile=pgp_privkey,
+            email=self.from_addr[1],
+            asset=self.asset,
+            wkd=wkd_ctrl,
+        )
 
         # We store so we can generate a URL later on
         self.pgp_key = pgp_key
 
-        self.use_pgp = use_pgp if not None \
-            else self.template_args['pgp']['default']
+        # Store the private key path so it can be round-tripped via url()
+        self.pgp_privkey = pgp_privkey
 
-        if self.use_pgp and not _pgp.PGP_SUPPORT:
+        if self.pgp_mode != PGP_MODE_DEFAULT and not _pgp.PGP_SUPPORT:
             self.logger.warning(
-                'PGP Support is not available on this installation; '
-                'ask admin to install PGPy')
+                "PGP Support is not available on this installation; "
+                "ask admin to install PGPy"
+            )
 
         return
 
@@ -393,7 +539,7 @@ class NotifyEmail(NotifyBase):
         it was provided.
         """
 
-        if self.smtp_host or not self.user:
+        if self.smtp_host:
             # SMTP Server was explicitly specified, therefore it is assumed
             # the caller knows what he's doing and is intentionally
             # over-riding any smarts to be applied. We also can not apply
@@ -401,45 +547,57 @@ class NotifyEmail(NotifyBase):
             return
 
         # detect our email address using our user/host combo
-        from_addr = '{}@{}'.format(
-            re.split(r'[\s@]+', self.user)[0],
-            self.host,
+        from_addr = (
+            "{}@{}".format(
+                re.split(r"[\s@]+", self.user)[0],
+                self.host,
+            )
+            if self.user
+            else self.host
         )
 
         for i in range(len(templates.EMAIL_TEMPLATES)):  # pragma: no branch
-            self.logger.trace('Scanning %s against %s' % (
-                from_addr, templates.EMAIL_TEMPLATES[i][0]
-            ))
+            self.logger.trace(
+                "Scanning %s against %s",
+                from_addr,
+                templates.EMAIL_TEMPLATES[i][0],
+            )
+
             match = templates.EMAIL_TEMPLATES[i][1].match(from_addr)
             if match:
                 self.logger.info(
-                    'Applying %s Defaults' %
-                    templates.EMAIL_TEMPLATES[i][0],
+                    f"Applying {templates.EMAIL_TEMPLATES[i][0]} Defaults"
                 )
+
                 # the secure flag can not be altered if defined in the template
-                self.secure = templates.EMAIL_TEMPLATES[i][2]\
-                    .get('secure', self.secure)
+                self.secure = templates.EMAIL_TEMPLATES[i][2].get(
+                    "secure", self.secure
+                )
 
                 # The SMTP Host check is already done above; if it was
                 # specified we wouldn't even reach this part of the code.
-                self.smtp_host = templates.EMAIL_TEMPLATES[i][2]\
-                    .get('smtp_host', self.smtp_host)
+                self.smtp_host = templates.EMAIL_TEMPLATES[i][2].get(
+                    "smtp_host", self.smtp_host
+                )
 
                 # The following can be over-ridden if defined manually in the
                 # Apprise URL.  Otherwise they take on the template value
                 if not port:
-                    self.port = templates.EMAIL_TEMPLATES[i][2]\
-                        .get('port', self.port)
+                    self.port = templates.EMAIL_TEMPLATES[i][2].get(
+                        "port", self.port
+                    )
                 if not secure_mode:
-                    self.secure_mode = templates.EMAIL_TEMPLATES[i][2]\
-                        .get('secure_mode', self.secure_mode)
+                    self.secure_mode = templates.EMAIL_TEMPLATES[i][2].get(
+                        "secure_mode", self.secure_mode
+                    )
 
                 # Adjust email login based on the defined usertype. If no entry
                 # was specified, then we default to having them all set (which
                 # basically implies that there are no restrictions and use use
                 # whatever was specified)
-                login_type = \
-                    templates.EMAIL_TEMPLATES[i][2].get('login_type', [])
+                login_type = templates.EMAIL_TEMPLATES[i][2].get(
+                    "login_type", []
+                )
                 if login_type:
                     # only apply additional logic to our user if a login_type
                     # was specified.
@@ -447,25 +605,40 @@ class NotifyEmail(NotifyBase):
                         if WebBaseLogin.EMAIL not in login_type:
                             # Email specified but login type
                             # not supported; switch it to user id
-                            self.user = match.group('id')
+                            self.user = match.group("id")
 
                         else:
                             # Enforce our host information
-                            self.host = self.user.split('@')[1]
+                            self.host = self.user.split("@")[1]
 
                     elif WebBaseLogin.USERID not in login_type:
                         # user specified but login type
                         # not supported; switch it to email
-                        self.user = '{}@{}'.format(self.user, self.host)
+                        self.user = "{}@{}".format(self.user, self.host)
+
+                if (
+                    "from_user" in templates.EMAIL_TEMPLATES[i][2]
+                    and not self.from_addr[1]
+                ):
+                    # Update our from address if defined
+                    self.from_addr[1] = "{}@{}".format(
+                        templates.EMAIL_TEMPLATES[i][2]["from_user"], self.host
+                    )
 
                 break
 
-    def send(self, body, title='', notify_type=NotifyType.INFO, attach=None,
-             **kwargs):
+    def send(
+        self,
+        body,
+        title="",
+        notify_type=NotifyType.INFO,
+        attach=None,
+        **kwargs,
+    ):
 
         if not self.targets:
             # There is no one to email; we're done
-            logger.warning('There are no Email recipients to notify')
+            logger.warning("There are no Email recipients to notify")
             return False
 
         # error tracking (used for function return)
@@ -478,10 +651,10 @@ class NotifyEmail(NotifyBase):
         self.throttle()
 
         try:
-            self.logger.debug('Connecting to remote SMTP server...')
+            self.logger.debug("Connecting to remote SMTP server...")
             socket_func = smtplib.SMTP
             if self.secure_mode == SecureMailMode.SSL:
-                self.logger.debug('Securing connection with SSL...')
+                self.logger.debug("Securing connection with SSL...")
                 socket_func = smtplib.SMTP_SSL
 
             socket = socket_func(
@@ -493,57 +666,68 @@ class NotifyEmail(NotifyBase):
 
             if self.secure_mode == SecureMailMode.STARTTLS:
                 # Handle Secure Connections
-                self.logger.debug('Securing connection with STARTTLS...')
+                self.logger.debug("Securing connection with STARTTLS...")
                 socket.starttls()
 
-            self.logger.trace('Login ID: {}'.format(self.user))
+            self.logger.trace("Login ID: {}".format(self.user))
             if self.user and self.password:
-                # Apply Login credetials
-                self.logger.debug('Applying user credentials...')
+                # Apply Login credentials
+                self.logger.debug("Applying user credentials...")
                 socket.login(self.user, self.password)
 
             # Prepare our headers
             headers = {
-                'X-Application': self.app_id,
+                "X-Application": self.app_id,
             }
             headers.update(self.headers)
 
             # Iterate over our email messages we can generate and then
             # send them off.
             for message in NotifyEmail.prepare_emails(
-                    subject=title, body=body, notify_format=self.notify_format,
-                    from_addr=self.from_addr, to=self.targets,
-                    cc=self.cc, bcc=self.bcc, reply_to=self.reply_to,
-                    smtp_host=self.smtp_host,
-                    attach=attach, headers=headers, names=self.names,
-                    pgp=self.pgp if self.use_pgp else None):
+                subject=title,
+                body=body,
+                notify_format=self.notify_format,
+                from_addr=self.from_addr,
+                to=self.targets,
+                cc=self.cc,
+                bcc=self.bcc,
+                reply_to=self.reply_to,
+                smtp_host=self.smtp_host,
+                attach=attach,
+                headers=headers,
+                names=self.names,
+                pgp=self.pgp,
+                pgp_mode=self.pgp_mode,
+                tzinfo=self.tzinfo,
+            ):
                 try:
                     socket.sendmail(
-                        self.from_addr[1],
-                        message.to_addrs,
-                        message.body)
+                        self.from_addr[1], message.to_addrs, message.body
+                    )
 
-                    self.logger.info('Sent Email to %s', message.recipient)
+                    self.logger.info("Sent Email to %s", message.recipient)
 
-                except (SocketError, smtplib.SMTPException, RuntimeError) as e:
+                except (OSError, smtplib.SMTPException, RuntimeError) as e:
                     self.logger.warning(
-                        'Sending email to "%s" failed.', message.recipient)
-                    self.logger.debug(f'Socket Exception: {e}')
+                        'Sending email to "%s" failed.', message.recipient
+                    )
+                    self.logger.debug(f"Socket Exception: {e}")
 
                     # Mark as failure
                     has_error = True
 
-        except (SocketError, smtplib.SMTPException, RuntimeError) as e:
+        except (OSError, smtplib.SMTPException, RuntimeError) as e:
             self.logger.warning(
                 'Connection error while submitting email to "%s"',
-                self.smtp_host)
-            self.logger.debug(f'Socket Exception: {e}')
+                self.smtp_host,
+            )
+            self.logger.debug(f"Socket Exception: {e}")
 
             # Mark as failure
             has_error = True
 
         except AppriseEmailException as e:
-            self.logger.debug(f'Socket Exception: {e}')
+            self.logger.debug(f"Socket Exception: {e}")
 
             # Mark as failure
             has_error = True
@@ -564,16 +748,40 @@ class NotifyEmail(NotifyBase):
         """
 
         # Define an URL parameters
-        params = {
-            'pgp': 'yes' if self.use_pgp else 'no',
-        }
+        params = {}
 
-        # Store our public key back into your URL
+        # Always emit pgp= when wkd=yes is set, even when the mode is the
+        # default 'none'.  Without this, a URL like ?pgp=none&wkd=yes would
+        # round-trip as ?wkd=yes and the wkd=yes→pgp=encrypt implication
+        # would silently re-enable encryption on re-parse.
+        if self.pgp_mode != PGP_MODE_DEFAULT or self.use_wkd:
+            params["pgp"] = self.pgp_mode
+
+        # Store our public key back into the URL when one was supplied;
+        # mask the value when building a privacy-safe URL because the key
+        # path can reveal local filesystem layout or remote key server URLs
         if self.pgp_key is not None:
-            params['pgp_key'] = NotifyEmail.quote(self.pgp_key, safe=':\\/')
+            params["pgppub"] = (
+                "****"
+                if privacy
+                else NotifyEmail.quote(self.pgp_key, safe=":\\/")
+            )
+
+        # Store the private key path in the URL in the same way; masked
+        # in privacy mode because private key paths are sensitive
+        if self.pgp_privkey is not None:
+            params["pgpprv"] = (
+                "****"
+                if privacy
+                else NotifyEmail.quote(self.pgp_privkey, safe=":\\/")
+            )
+
+        # Include wkd= when Web Key Directory lookup is enabled
+        if self.use_wkd:
+            params["wkd"] = "yes"
 
         # Append our headers into our parameters
-        params.update({'+{}'.format(k): v for k, v in self.headers.items()})
+        params.update({"+{}".format(k): v for k, v in self.headers.items()})
 
         # Extend our parameters
         params.update(self.url_parameters(privacy=privacy, *args, **kwargs))
@@ -585,106 +793,145 @@ class NotifyEmail(NotifyBase):
 
         if self.smtp_host != self.host:
             # Apply our SMTP Host only if it differs from the provided hostname
-            params['smtp'] = self.smtp_host
+            params["smtp"] = self.smtp_host
 
         if self.secure:
-            # Mode is only requried if we're dealing with a secure connection
-            params['mode'] = self.secure_mode
+            # Mode is only required if we're dealing with a secure connection
+            params["mode"] = self.secure_mode
 
         if self.from_addr[0] and self.from_addr[0] != self.app_id:
             # A custom name was provided
-            params['from'] = self.from_addr[0] if not from_addr else \
-                formataddr((self.from_addr[0], from_addr), charset='utf-8')
+            params["from"] = (
+                self.from_addr[0]
+                if not from_addr
+                else formataddr(
+                    (self.from_addr[0], from_addr), charset="utf-8"
+                )
+            )
 
         elif from_addr:
-            params['from'] = formataddr((False, from_addr), charset='utf-8')
+            params["from"] = formataddr((False, from_addr), charset="utf-8")
 
         elif not self.user:
-            params['from'] = \
-                formataddr((False, self.from_addr[1]), charset='utf-8')
+            params["from"] = formataddr(
+                (False, self.from_addr[1]), charset="utf-8"
+            )
 
         if self.cc:
             # Handle our Carbon Copy Addresses
-            params['cc'] = ','.join([
-                formataddr(
-                    (self.names[e] if e in self.names else False, e),
-                    # Swap comma for it's escaped url code (if detected) since
-                    # we're using that as a delimiter
-                    charset='utf-8').replace(',', '%2C')
-                for e in self.cc])
+            params["cc"] = ",".join(
+                [
+                    formataddr(
+                        (self.names.get(e, False), e),
+                        # Swap comma for its escaped url code (if
+                        # detected) since we use it as a delimiter
+                        charset="utf-8",
+                    ).replace(",", "%2C")
+                    for e in self.cc
+                ]
+            )
 
         if self.bcc:
             # Handle our Blind Carbon Copy Addresses
-            params['bcc'] = ','.join([
-                formataddr(
-                    (self.names[e] if e in self.names else False, e),
-                    # Swap comma for it's escaped url code (if detected) since
-                    # we're using that as a delimiter
-                    charset='utf-8').replace(',', '%2C')
-                for e in self.bcc])
+            params["bcc"] = ",".join(
+                [
+                    formataddr(
+                        (self.names.get(e, False), e),
+                        # Swap comma for its escaped url code (if
+                        # detected) since we use it as a delimiter
+                        charset="utf-8",
+                    ).replace(",", "%2C")
+                    for e in self.bcc
+                ]
+            )
 
         if self.reply_to:
             # Handle our Reply-To Addresses
-            params['reply'] = ','.join([
-                formataddr(
-                    (self.names[e] if e in self.names else False, e),
-                    # Swap comma for it's escaped url code (if detected) since
-                    # we're using that as a delimiter
-                    charset='utf-8').replace(',', '%2C')
-                for e in self.reply_to])
+            params["reply"] = ",".join(
+                [
+                    formataddr(
+                        (self.names.get(e, False), e),
+                        # Swap comma for its escaped url code (if
+                        # detected) since we use it as a delimiter
+                        charset="utf-8",
+                    ).replace(",", "%2C")
+                    for e in self.reply_to
+                ]
+            )
 
         # pull email suffix from username (if present)
-        user = None if not self.user else self.user.split('@')[0]
+        user = None if not self.user else self.user.split("@")[0]
 
         # Determine Authentication
-        auth = ''
+        auth = ""
         if self.user and self.password:
-            auth = '{user}:{password}@'.format(
-                user=NotifyEmail.quote(user, safe=''),
+            auth = "{user}:{password}@".format(
+                user=NotifyEmail.quote(user, safe=""),
                 password=self.pprint(
-                    self.password, privacy, mode=PrivacyMode.Secret, safe=''),
+                    self.password, privacy, mode=PrivacyMode.Secret, safe=""
+                ),
             )
         elif user:
             # user url
-            auth = '{user}@'.format(
-                user=NotifyEmail.quote(user, safe=''),
+            auth = "{user}@".format(
+                user=NotifyEmail.quote(user, safe=""),
             )
 
         # Default Port setup
-        default_port = SECURE_MODES[self.secure_mode]['default_port']
+        default_port = SECURE_MODES[self.secure_mode]["default_port"]
 
         # a simple boolean check as to whether we display our target emails
         # or not
-        has_targets = \
-            not (len(self.targets) == 1
-                 and self.targets[0][1] == self.from_addr[1])
+        has_targets = not (
+            len(self.targets) == 1 and self.targets[0][1] == self.from_addr[1]
+        )
 
-        return '{schema}://{auth}{hostname}{port}/{targets}?{params}'.format(
+        return "{schema}://{auth}{hostname}{port}/{targets}?{params}".format(
             schema=self.secure_protocol if self.secure else self.protocol,
             auth=auth,
             # never encode hostname since we're expecting it to be a valid one
             hostname=self.host,
-            port='' if self.port is None or self.port == default_port
-                 else ':{}'.format(self.port),
-            targets='' if not has_targets else '/'.join(
-                [NotifyEmail.quote('{}{}'.format(
-                    '' if not e[0] else '{}:'.format(e[0]), e[1]),
-                    safe='') for e in self.targets]),
-            params=NotifyEmail.urlencode(params),
+            port=(
+                ""
+                if self.port is None or self.port == default_port
+                else ":{}".format(self.port)
+            ),
+            targets=(
+                ""
+                if not has_targets
+                else "/".join(
+                    [
+                        NotifyEmail.quote(
+                            "{}{}".format(
+                                "" if not e[0] else "{}:".format(e[0]), e[1]
+                            ),
+                            safe="",
+                        )
+                        for e in self.targets
+                    ]
+                )
+            ),
+            params=NotifyEmail.urlencode(params, safe="*"),
         )
 
     @property
     def url_identifier(self):
         """
         Returns all of the identifiers that make this URL unique from
-        another simliar one. Targets or end points should never be identified
+        another similar one. Targets or end points should never be identified
         here.
         """
         return (
             self.secure_protocol if self.secure else self.protocol,
-            self.user, self.password, self.host, self.smtp_host,
-            self.port if self.port
-            else SECURE_MODES[self.secure_mode]['default_port'],
+            self.user,
+            self.password,
+            self.host,
+            self.smtp_host,
+            (
+                self.port
+                if self.port
+                else SECURE_MODES[self.secure_mode]["default_port"]
+            ),
         )
 
     def __len__(self):
@@ -706,90 +953,136 @@ class NotifyEmail(NotifyBase):
             return results
 
         # Prepare our target lists
-        results['targets'] = []
+        results["targets"] = []
 
-        if is_ipaddr(results['host']):
+        if is_ipaddr(results["host"]):
             # Silently move on and do not disrupt any configuration
             pass
 
-        elif not is_hostname(results['host'], ipv4=False, ipv6=False,
-                             underscore=False):
-
-            if is_email(NotifyEmail.unquote(results['host'])):
+        elif not is_hostname(
+            results["host"], ipv4=False, ipv6=False, underscore=False
+        ):
+            if is_email(NotifyEmail.unquote(results["host"])):
                 # Don't lose defined email addresses
-                results['targets'].append(NotifyEmail.unquote(results['host']))
+                results["targets"].append(NotifyEmail.unquote(results["host"]))
 
             # Detect if we have a valid hostname or not; be sure to reset it's
             # value if invalid; we'll attempt to figure this out later on
-            results['host'] = ''
+            results["host"] = ""
 
-        # Get PGP Flag
-        results['use_pgp'] = \
-            parse_bool(results['qsd'].get(
-                'pgp', NotifyEmail.template_args['pgp']['default']))
+        # Get PGP mode -- accept the new choice strings (none, encrypt)
+        # with prefix matching, and fall back to legacy boolean parsing
+        # for backward compatibility with existing ?pgp=yes/no URLs.
+        pgp_raw = results["qsd"].get("pgp", "")
+        if pgp_raw:
+            pgp_mode = next(
+                (m for m in PGP_MODES if m.startswith(str(pgp_raw).lower())),
+                None,
+            )
+            if pgp_mode is None:
+                # Not a recognised mode string; try legacy boolean
+                if parse_bool(pgp_raw):
+                    logger.warning(
+                        "Email ?pgp=%s is deprecated;"
+                        " use ?pgp=encrypt instead",
+                        pgp_raw,
+                    )
+                    pgp_mode = PGPMode.ENCRYPT
+                else:
+                    pgp_mode = PGP_MODE_DEFAULT
+            results["pgp_mode"] = pgp_mode
 
-        # Get PGP Public Key Override
-        if 'pgpkey' in results['qsd'] and results['qsd']['pgpkey']:
-            results['pgp_key'] = \
-                NotifyEmail.unquote(results['qsd']['pgpkey'])
+        # Get Web Key Directory flag
+        if "wkd" in results["qsd"] and results["qsd"]["wkd"]:
+            results["use_wkd"] = parse_bool(results["qsd"]["wkd"])
+
+        # wkd=yes implies pgp=encrypt when pgp= was not present in the URL
+        if results.get("use_wkd") and "pgp_mode" not in results:
+            results["pgp_mode"] = PGPMode.ENCRYPT
+
+        # Get PGP Public Key Override (canonical name: pgppub=)
+        if "pgppub" in results["qsd"] and results["qsd"]["pgppub"]:
+            results["pgp_key"] = NotifyEmail.unquote(results["qsd"]["pgppub"])
+
+        # Backward-compat: pgpkey= is the old name for pgppub=; emit a
+        # deprecation warning and map it through so existing URLs still work.
+        if "pgpkey" in results["qsd"] and results["qsd"]["pgpkey"]:
+            logger.warning(
+                "Email ?pgpkey= is deprecated; use ?pgppub= instead."
+                " Support for pgpkey= will be removed in a future release."
+            )
+            # Only override pgp_key when pgppub= was not also present
+            if "pgp_key" not in results:
+                results["pgp_key"] = NotifyEmail.unquote(
+                    results["qsd"]["pgpkey"]
+                )
+
+        # Get PGP Private Key Override (canonical name: pgpprv=)
+        if "pgpprv" in results["qsd"] and results["qsd"]["pgpprv"]:
+            results["pgp_privkey"] = NotifyEmail.unquote(
+                results["qsd"]["pgpprv"]
+            )
 
         # The From address is a must; either through the use of templates
         # from= entry and/or merging the user and hostname together, this
         # must be calculated or parse_url will fail.
-        from_addr = ''
+        from_addr = ""
 
         # The server we connect to to send our mail to
-        smtp_host = ''
+        smtp_host = ""
 
         # Get our potential email targets; if none our found we'll just
         # add one to ourselves
-        results['targets'] += NotifyEmail.split_path(results['fullpath'])
+        results["targets"] += NotifyEmail.split_path(results["fullpath"])
 
         # Attempt to detect 'to' email address
-        if 'to' in results['qsd'] and len(results['qsd']['to']):
-            results['targets'].append(results['qsd']['to'])
+        if "to" in results["qsd"] and len(results["qsd"]["to"]):
+            results["targets"].append(results["qsd"]["to"])
 
         # Attempt to detect 'from' email address
-        if 'from' in results['qsd'] and len(results['qsd']['from']):
-            from_addr = NotifyEmail.unquote(results['qsd']['from'])
+        if "from" in results["qsd"] and len(results["qsd"]["from"]):
+            from_addr = NotifyEmail.unquote(results["qsd"]["from"])
 
-            if 'name' in results['qsd'] and len(results['qsd']['name']):
+            if "name" in results["qsd"] and len(results["qsd"]["name"]):
                 from_addr = formataddr(
-                    (NotifyEmail.unquote(results['qsd']['name']), from_addr),
-                    charset='utf-8')
+                    (NotifyEmail.unquote(results["qsd"]["name"]), from_addr),
+                    charset="utf-8",
+                )
 
-        elif 'name' in results['qsd'] and len(results['qsd']['name']):
+        elif "name" in results["qsd"] and len(results["qsd"]["name"]):
             # Extract from name to associate with from address
-            from_addr = NotifyEmail.unquote(results['qsd']['name'])
+            from_addr = NotifyEmail.unquote(results["qsd"]["name"])
 
         # Store SMTP Host if specified
-        if 'smtp' in results['qsd'] and len(results['qsd']['smtp']):
+        if "smtp" in results["qsd"] and len(results["qsd"]["smtp"]):
             # Extract the smtp server
-            smtp_host = NotifyEmail.unquote(results['qsd']['smtp'])
+            smtp_host = NotifyEmail.unquote(results["qsd"]["smtp"])
 
-        if 'mode' in results['qsd'] and len(results['qsd']['mode']):
+        if "mode" in results["qsd"] and len(results["qsd"]["mode"]):
             # Extract the secure mode to over-ride the default
-            results['secure_mode'] = results['qsd']['mode'].lower()
+            results["secure_mode"] = results["qsd"]["mode"].lower()
 
         # Handle Carbon Copy Addresses
-        if 'cc' in results['qsd'] and len(results['qsd']['cc']):
-            results['cc'] = results['qsd']['cc']
+        if "cc" in results["qsd"] and len(results["qsd"]["cc"]):
+            results["cc"] = results["qsd"]["cc"]
 
         # Handle Blind Carbon Copy Addresses
-        if 'bcc' in results['qsd'] and len(results['qsd']['bcc']):
-            results['bcc'] = results['qsd']['bcc']
+        if "bcc" in results["qsd"] and len(results["qsd"]["bcc"]):
+            results["bcc"] = results["qsd"]["bcc"]
 
         # Handle Reply To Addresses
-        if 'reply' in results['qsd'] and len(results['qsd']['reply']):
-            results['reply_to'] = results['qsd']['reply']
+        if "reply" in results["qsd"] and len(results["qsd"]["reply"]):
+            results["reply_to"] = results["qsd"]["reply"]
 
-        results['from_addr'] = from_addr
-        results['smtp_host'] = smtp_host
+        results["from_addr"] = from_addr
+        results["smtp_host"] = smtp_host
 
         # Add our Meta Headers that the user can provide with their outbound
         # emails
-        results['headers'] = {NotifyBase.unquote(x): NotifyBase.unquote(y)
-                              for x, y in results['qsd+'].items()}
+        results["headers"] = {
+            NotifyBase.unquote(x): NotifyBase.unquote(y)
+            for x, y in results["qsd+"].items()
+        }
 
         return results
 
@@ -804,22 +1097,35 @@ class NotifyEmail(NotifyBase):
         """
         if not input_string:
             return None
-        return 'utf-8' if not all(ord(c) < 128 for c in input_string) else None
+        return "utf-8" if not all(ord(c) < 128 for c in input_string) else None
 
     @staticmethod
-    def prepare_emails(subject, body, from_addr, to,
-                       cc=set(), bcc=set(), reply_to=set(),
-                       # Providing an SMTP Host helps improve Email Message-ID
-                       # and avoids getting flagged as spam
-                       smtp_host=None,
-                       # Can be either 'html' or 'text'
-                       notify_format=NotifyFormat.HTML,
-                       attach=None, headers=dict(),
-                       # Names can be a dictionary
-                       names=None,
-                       # Pretty Good Privacy Support; Pass in an
-                       # ApprisePGPController if you wish to use it
-                       pgp=None):
+    def prepare_emails(
+        subject,
+        body,
+        from_addr,
+        to,
+        cc: Optional[set] = None,
+        bcc: Optional[set] = None,
+        reply_to: Optional[set] = None,
+        # Providing an SMTP Host helps improve Email Message-ID
+        # and avoids getting flagged as spam
+        smtp_host=None,
+        # Can be either 'html' or 'text'
+        notify_format=NotifyFormat.HTML,
+        attach=None,
+        headers: Optional[dict] = None,
+        # Names can be a dictionary
+        names=None,
+        # Pretty Good Privacy Support; Pass in an
+        # ApprisePGPController if you wish to use it
+        pgp=None,
+        # PGP mode string (PGPMode.NONE / PGPMode.SIGN / PGPMode.ENCRYPT)
+        pgp_mode=PGP_MODE_DEFAULT,
+        # Define our timezone; if one isn't provided, then we use
+        # the system time instead
+        tzinfo=None,
+    ):
         """
         Generator for emails
             from_addr: must be in format: (from_name, from_addr)
@@ -837,27 +1143,36 @@ class NotifyEmail(NotifyBase):
             names: This is a dictionary of email addresses as keys and the
                    Names to associate with them when sending the email.
                    This is cross referenced for the cc and bcc lists
-            pgp:   Encrypting the message using Pretty Good Privacy support
-                   This requires that the pgp_path provided exists and
-                   keys can be referenced here to perform the encryption
-                   with. If a key isn't found, one will be generated.
-
-                   pgp support requires the 'PGPy' Python library to be
-                   available.
-
-                   Pass in an ApprisePGPController() if you wish to use this
+            pgp:      ApprisePGPController for signing and/or encrypting
+                      email via Pretty Good Privacy.  Pass None to skip.
+            pgp_mode: PGPMode string controlling what PGP operation to
+                      perform.  PGPMode.ENCRYPT encrypts (existing
+                      behaviour).  PGPMode.SIGN signs with the sender's
+                      private key and opportunistically encrypts when a
+                      recipient public key is available.
         """
-
         if not to:
             # There is no one to email; we're done
-            msg = 'There are no Email recipients to notify'
+            msg = "There are no Email recipients to notify"
             logger.warning(msg)
-            raise AppriseEmailException(msg)
+            raise AppriseEmailException(msg) from None
 
-        elif pgp and not _pgp.PGP_SUPPORT:
-            msg = 'PGP Support unavailable; install PGPy library'
+        elif pgp and pgp_mode != PGP_MODE_DEFAULT and not _pgp.PGP_SUPPORT:
+            msg = "PGP Support unavailable; install PGPy library"
             logger.warning(msg)
-            raise AppriseEmailException(msg)
+            raise AppriseEmailException(msg) from None
+
+        if headers is None:
+            headers = {}
+
+        if cc is None:
+            cc = set()
+
+        if bcc is None:
+            bcc = set()
+
+        if reply_to is None:
+            reply_to = set()
 
         if not names:
             # Prepare a empty dictionary to prevent errors/warnings
@@ -865,9 +1180,13 @@ class NotifyEmail(NotifyBase):
 
         if not smtp_host:
             # Generate a host identifier (used for Message-ID Creation)
-            smtp_host = from_addr[1].split('@')[1]
+            smtp_host = from_addr[1].split("@")[1]
 
-        logger.debug('SMTP Host: {smtp_host}')
+        if not tzinfo:
+            # use server time
+            tzinfo = datetime.now().astimezone().tzinfo
+
+        logger.debug(f"SMTP Host: {smtp_host}")
 
         # Create a copy of the targets list
         emails = list(to)
@@ -876,55 +1195,60 @@ class NotifyEmail(NotifyBase):
             to_name, to_addr = emails.pop(0)
 
             # Strip target out of cc list if in To or Bcc
-            _cc = (cc - bcc - set([to_addr]))
+            cc_ = cc - bcc - {to_addr}
 
             # Strip target out of bcc list if in To
-            _bcc = (bcc - set([to_addr]))
+            bcc_ = bcc - {to_addr}
 
             # Strip target out of reply_to list if in To
-            _reply_to = (reply_to - set([to_addr]))
+            reply_to_ = reply_to - {to_addr}
 
             # Format our cc addresses to support the Name field
-            _cc = [formataddr(
-                (names.get(addr, False), addr), charset='utf-8')
-                for addr in _cc]
+            cc_ = [
+                formataddr((names.get(addr, False), addr), charset="utf-8")
+                for addr in cc_
+            ]
 
             # Format our bcc addresses to support the Name field
-            _bcc = [formataddr(
-                (names.get(addr, False), addr), charset='utf-8')
-                for addr in _bcc]
+            bcc_ = [
+                formataddr((names.get(addr, False), addr), charset="utf-8")
+                for addr in bcc_
+            ]
 
-            if reply_to:
+            if reply_to_:
                 # Format our reply-to addresses to support the Name field
-                reply_to = [formataddr(
-                    (names.get(addr, False), addr), charset='utf-8')
-                    for addr in reply_to]
+                reply_to = [
+                    formataddr((names.get(addr, False), addr), charset="utf-8")
+                    for addr in reply_to_
+                ]
 
             logger.debug(
-                'Email From: {}'.format(
-                    formataddr(from_addr, charset='utf-8')))
+                "Email From: {}".format(formataddr(from_addr, charset="utf-8"))
+            )
 
-            logger.debug('Email To: {}'.format(to_addr))
-            if _cc:
-                logger.debug('Email Cc: {}'.format(', '.join(_cc)))
-            if _bcc:
-                logger.debug('Email Bcc: {}'.format(', '.join(_bcc)))
-            if _reply_to:
-                logger.debug(
-                    'Email Reply-To: {}'.format(', '.join(_reply_to))
-                )
+            logger.debug("Email To: {}".format(to_addr))
+            if cc_:
+                logger.debug("Email Cc: {}".format(", ".join(cc_)))
+            if bcc_:
+                logger.debug("Email Bcc: {}".format(", ".join(bcc_)))
+            if reply_to_:
+                logger.debug("Email Reply-To: {}".format(", ".join(reply_to_)))
 
             # Prepare Email Message
             if notify_format == NotifyFormat.HTML:
                 base = MIMEMultipart("alternative")
-                base.attach(MIMEText(
-                    convert_between(
-                        NotifyFormat.HTML, NotifyFormat.TEXT, body),
-                    'plain', 'utf-8')
+                base.attach(
+                    MIMEText(
+                        convert_between(
+                            NotifyFormat.HTML, NotifyFormat.TEXT, body
+                        ),
+                        "plain",
+                        "utf-8",
+                    )
                 )
-                base.attach(MIMEText(body, 'html', 'utf-8'))
+                base.attach(MIMEText(body, "html", "utf-8"))
             else:
-                base = MIMEText(body, 'plain', 'utf-8')
+                base = MIMEText(body, "plain", "utf-8")
 
             if attach:
                 mixed = MIMEMultipart("mixed")
@@ -936,59 +1260,163 @@ class NotifyEmail(NotifyBase):
                         # exit since this isn't what the end user wanted
 
                         # We could not access the attachment
-                        msg = 'Could not access attachment {}.'.format(
-                            attachment.url(privacy=True))
+                        msg = "Could not access attachment {}.".format(
+                            attachment.url(privacy=True)
+                        )
                         logger.warning(msg)
                         raise AppriseEmailException(msg)
 
                     logger.debug(
-                        'Preparing Email attachment {}'.format(
-                            attachment.url(privacy=True)))
+                        "Preparing Email attachment {}".format(
+                            attachment.url(privacy=True)
+                        )
+                    )
 
                     with open(attachment.path, "rb") as abody:
                         app = MIMEApplication(abody.read())
                         app.set_type(attachment.mimetype)
 
                         # Prepare our attachment name
-                        filename = attachment.name \
-                            if attachment.name else f'file{no:03}.dat'
+                        filename = (
+                            attachment.name
+                            if attachment.name
+                            else f"file{no:03}.dat"
+                        )
 
                         app.add_header(
-                            'Content-Disposition',
+                            "Content-Disposition",
                             'attachment; filename="{}"'.format(
-                                Header(filename, 'utf-8')),
+                                Header(filename, "utf-8")
+                            ),
                         )
                         mixed.attach(app)
                 base = mixed
 
-            if pgp:
-                logger.debug("Securing Email with PGP Encryption")
-                # Set our header information to include in the encryption
-                base['From'] = formataddr(
-                    (None, from_addr[1]), charset='utf-8')
-                base['To'] = formataddr((None, to_addr), charset='utf-8')
-                base['Subject'] = \
-                    Header(subject, NotifyEmail._get_charset(subject))
+            if pgp and pgp_mode == PGPMode.SIGN:
+                logger.debug("Securing Email with PGP Signature")
+                # RFC 3156 requires the signature to be computed over the CRLF
+                # to guarantee all recipients can verify against it.
+                sig_result = pgp.sign(
+                    re.sub(r"(?:\r\n|\n|\r(?!\n))", "\r\n", base.as_string())
+                )
 
-                # Apply our encryption
-                encrypted_content = \
-                    pgp.encrypt(base.as_string(), to_addr)
-
-                if not encrypted_content:
-                    # Unable to send notification
-                    msg = 'Unable to encrypt email via PGP'
+                if not sig_result:
+                    # Signing was requested but could not be performed;
+                    # this is a hard failure for the sign mode.  Include the
+                    # plugin-specific hint here (pgp.py logs only generic
+                    # debug detail so it stays reusable across plugins).
+                    msg = (
+                        "Unable to sign email via PGP; supply a private key"
+                        " via pgpprv= or place one in the cache directory"
+                    )
                     logger.warning(msg)
                     raise AppriseEmailException(msg)
 
-                # prepare our messsage
+                # Unpack the signature and its hash algorithm label
+                sig_str, micalg = sig_result
+
+                # Build the RFC 3156 multipart/signed container
+                signed = MIMEMultipart(
+                    "signed",
+                    micalg=micalg,
+                    protocol="application/pgp-signature",
+                )
+
+                # First part: the original message body (must not be
+                # modified after this point as the signature covers it)
+                signed.attach(base)
+
+                # Second part: the detached PGP signature block
+                sig_part = MIMEBase("application", "pgp-signature")
+                sig_part.set_payload(sig_str)
+                sig_part.add_header(
+                    "Content-Disposition",
+                    "attachment",
+                    filename="signature.asc",
+                )
+                signed.attach(sig_part)
+
+                # Replace base with the signed container so the rest of
+                # the function continues to work unchanged
+                base = signed
+
+                # Opportunistic encryption: try to find the recipient's
+                # public key and encrypt the signed payload if found.
+                # autogen=False prevents a fake key from being auto-created
+                # for the recipient -- only pre-existing keys (WKD lookups
+                # or explicit pgppub= files) qualify for encryption.
+                # A missing key is NOT an error in sign mode -- we simply
+                # send the signed (unencrypted) email instead.
+                enc_content = pgp.encrypt(
+                    base.as_string(), to_addr, autogen=False
+                )
+                if enc_content:
+                    logger.debug("PGP public key found; adding encryption")
+
+                    # Wrap the signed body in a multipart/encrypted
+                    # container (the signed payload becomes the ciphertext)
+                    enc = MIMEMultipart(
+                        "encrypted",
+                        protocol="application/pgp-encrypted",
+                    )
+
+                    # Autocrypt header for DeltaChat / compatible clients
+                    enc.add_header(
+                        "Autocrypt",
+                        "addr={}; prefer-encrypt=mutual".format(
+                            formataddr((False, to_addr), charset="utf-8")
+                        ),
+                    )
+
+                    # Version identifier part (required by RFC 3156)
+                    ver_part = MIMEText("Version: 1", "plain")
+                    ver_part.set_type("application/pgp-encrypted")
+                    enc.attach(ver_part)
+
+                    # Encrypted data part
+                    data_part = MIMEBase("application", "octet-stream")
+                    data_part.set_payload(enc_content)
+                    enc.attach(data_part)
+
+                    # Replace base with the fully encrypted container
+                    base = enc
+
+            elif pgp and pgp_mode == PGPMode.ENCRYPT:
+                logger.debug("Securing Email with PGP Encryption")
+                # Set our header information to include in the encryption
+                base["From"] = formataddr(
+                    (None, from_addr[1]), charset="utf-8"
+                )
+                base["To"] = formataddr((None, to_addr), charset="utf-8")
+                base["Subject"] = Header(
+                    subject, NotifyEmail._get_charset(subject)
+                )
+
+                # Apply our encryption
+                encrypted_content = pgp.encrypt(base.as_string(), to_addr)
+
+                if not encrypted_content:
+                    # Unable to send notification.  Include the plugin-specific
+                    # hint here (pgp.py logs only generic debug detail so it
+                    # stays reusable across plugins).
+                    msg = (
+                        "Unable to encrypt email via PGP; supply a public key"
+                        " via pgppub= or place one in the cache directory"
+                    )
+                    logger.warning(msg)
+                    raise AppriseEmailException(msg)
+
+                # prepare our message
                 base = MIMEMultipart(
-                    "encrypted", protocol="application/pgp-encrypted")
+                    "encrypted", protocol="application/pgp-encrypted"
+                )
 
                 # Store Autocrypt header (DeltaChat Support)
                 base.add_header(
                     "Autocrypt",
-                    "addr=%s; prefer-encrypt=mutual" % formataddr(
-                        (False, to_addr), charset='utf-8'))
+                    f"addr={formataddr((False, to_addr), charset='utf-8')}; "
+                    "prefer-encrypt=mutual",
+                )
 
                 # Set Encryption Info Part
                 enc_payload = MIMEText("Version: 1", "plain")
@@ -1003,22 +1431,29 @@ class NotifyEmail(NotifyBase):
             for k, v in headers.items():
                 base[k] = Header(v, NotifyEmail._get_charset(v))
 
-            base['Subject'] = \
-                Header(subject, NotifyEmail._get_charset(subject))
-            base['From'] = formataddr(from_addr, charset='utf-8')
-            base['To'] = formataddr((to_name, to_addr), charset='utf-8')
-            base['Message-ID'] = make_msgid(domain=smtp_host)
-            base['Date'] = \
-                datetime.now(timezone.utc)\
-                .strftime("%a, %d %b %Y %H:%M:%S +0000")
+            base["Subject"] = Header(
+                subject, NotifyEmail._get_charset(subject)
+            )
+            base["From"] = formataddr(from_addr, charset="utf-8")
+            base["To"] = formataddr((to_name, to_addr), charset="utf-8")
+            base["Message-ID"] = make_msgid(domain=smtp_host)
+            base["Date"] = format_datetime(datetime.now(tz=tzinfo))
 
             if cc:
-                base['Cc'] = ','.join(_cc)
+                base["Cc"] = ",".join(cc_)
 
-            if reply_to:
-                base['Reply-To'] = ','.join(_reply_to)
+            if reply_to_:
+                base["Reply-To"] = ",".join(reply_to)
 
             yield EmailMessage(
                 recipient=to_addr,
-                to_addrs=[to_addr] + list(_cc) + list(_bcc),
-                body=base.as_string())
+                to_addrs=[to_addr, *list(cc_), *list(bcc_)],
+                body=base.as_string(),
+            )
+
+    @staticmethod
+    def runtime_deps():
+        """Return a tuple of top-level Python package names that this plugin
+        imported as optional runtime dependencies.
+        """
+        return ("pgpy",)

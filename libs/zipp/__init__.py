@@ -7,19 +7,18 @@ https://github.com/python/importlib_metadata/wiki/Development-Methodology
 for more detail.
 """
 
+import functools
 import io
-import posixpath
-import zipfile
 import itertools
-import contextlib
 import pathlib
+import posixpath
 import re
 import stat
-import sys
+import zipfile
 
+from ._functools import none_as, save_method_args
 from .compat.py310 import text_encoding
 from .glob import Translator
-
 
 __all__ = ['Path']
 
@@ -87,13 +86,12 @@ class InitializedState:
     Mix-in to save the initialization state for pickling.
     """
 
+    @save_method_args
     def __init__(self, *args, **kwargs):
-        self.__args = args
-        self.__kwargs = kwargs
         super().__init__(*args, **kwargs)
 
     def __getstate__(self):
-        return self.__args, self.__kwargs
+        return self._saved___init__.args, self._saved___init__.kwargs
 
     def __setstate__(self, state):
         args, kwargs = state
@@ -182,22 +180,22 @@ class FastLookup(CompleteDirs):
     """
 
     def namelist(self):
-        with contextlib.suppress(AttributeError):
-            return self.__names
-        self.__names = super().namelist()
-        return self.__names
+        return self._namelist
+
+    @functools.cached_property
+    def _namelist(self):
+        return super().namelist()
 
     def _name_set(self):
-        with contextlib.suppress(AttributeError):
-            return self.__lookup
-        self.__lookup = super()._name_set()
-        return self.__lookup
+        return self._name_set_prop
+
+    @functools.cached_property
+    def _name_set_prop(self):
+        return super()._name_set()
 
 
 def _extract_text_encoding(encoding=None, *args, **kwargs):
-    # compute stack level so that the caller of the caller sees any warning.
-    is_pypy = sys.implementation.name == 'pypy'
-    stack_level = 3 + is_pypy
+    stack_level = 3
     return text_encoding(encoding, stack_level), args, kwargs
 
 
@@ -273,7 +271,7 @@ class Path:
     resolve to the zipfile.
 
     >>> str(path)
-    'mem/abcde.zip/'
+    'mem/abcde.zip'
     >>> path.name
     'abcde.zip'
     >>> path.filename == pathlib.Path('mem/abcde.zip')
@@ -340,7 +338,7 @@ class Path:
         if self.is_dir():
             raise IsADirectoryError(self)
         zip_mode = mode[0]
-        if not self.exists() and zip_mode == 'r':
+        if zip_mode == 'r' and not self.exists():
             raise FileNotFoundError(self)
         stream = self.root.open(self.at, zip_mode, pwd=pwd)
         if 'b' in mode:
@@ -352,7 +350,7 @@ class Path:
         return io.TextIOWrapper(stream, encoding, *args, **kwargs)
 
     def _base(self):
-        return pathlib.PurePosixPath(self.at or self.root.filename)
+        return pathlib.PurePosixPath(self.at) if self.at else self.filename
 
     @property
     def name(self):
@@ -400,7 +398,7 @@ class Path:
 
     def iterdir(self):
         if not self.is_dir():
-            raise ValueError("Can't listdir a file")
+            raise NotADirectoryError("Can't listdir a file")
         subs = map(self._next, self.root.namelist())
         return filter(self._is_child, subs)
 
@@ -431,7 +429,8 @@ class Path:
         return posixpath.relpath(str(self), str(other.joinpath(*extra)))
 
     def __str__(self):
-        return posixpath.join(self.root.filename, self.at)
+        root = none_as(self.root.filename, ':zipfile:')
+        return posixpath.join(root, self.at) if self.at else root
 
     def __repr__(self):
         return self.__repr.format(self=self)
