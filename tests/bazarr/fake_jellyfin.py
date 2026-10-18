@@ -5,6 +5,7 @@ Both requests and responses are validated — if you pass bad params or configur
 bad fixture data, it fails immediately.
 """
 
+from copy import deepcopy
 import json
 import os
 
@@ -173,6 +174,11 @@ class FakeJellyfinClient:
         ]
 
         self.items = []
+        self.library_items = {}
+        self.item_details = {}
+        self.get_item_calls = []
+        self.update_item_calls = []
+        self.get_items_calls = []
         self.episodes = {}  # {"series-1": {1: [make_episode(), ...]}}
 
         # Track calls for assertions
@@ -190,18 +196,34 @@ class FakeJellyfinClient:
         return self.libraries
 
     def get_items(self, params: dict) -> list:
+        self.get_items_calls.append(deepcopy(params))
         if _has_spec():
             _validate_params(params, "/Items")
             if "fields" in params:
                 _validate_fields(params["fields"])
+        items = self.library_items.get(params.get("parentId"), self.items)
         response = {
-            "Items": self.items,
-            "TotalRecordCount": len(self.items),
+            "Items": items,
+            "TotalRecordCount": len(items),
             "StartIndex": 0,
         }
         if _has_spec():
             validate_response(response, "/Items")
         return response["Items"]
+
+    def get_item(self, item_id: str) -> dict:
+        self.get_item_calls.append(item_id)
+        item = self.item_details[item_id]
+        if _has_spec():
+            validate_response({'Items': [item], 'TotalRecordCount': 1, 'StartIndex': 0}, '/Items')
+        return deepcopy(item)
+
+    def update_item(self, item_id: str, metadata: dict) -> None:
+        if _has_spec():
+            _validate_request_body(metadata, '/Items/{itemId}')
+        if metadata.get('Id') != item_id:
+            raise ValueError("Jellyfin item ID does not match its metadata")
+        self.update_item_calls.append((item_id, deepcopy(metadata)))
 
     def get_episodes(self, series_id: str, season: int) -> list:
         params = {"season": season, "fields": "ProviderIds"}

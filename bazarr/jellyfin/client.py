@@ -7,6 +7,12 @@ import requests
 
 logger = logging.getLogger(__name__)
 
+_ITEM_METADATA_FIELDS = (
+    'DateCreated', 'Settings', 'Tags', 'Genres', 'Overview', 'OriginalTitle',
+    'ProviderIds', 'People', 'Studios', 'ProductionLocations', 'CustomRating',
+    'Taglines', 'SortName', 'SpecialEpisodeNumbers', 'Path',
+)
+
 
 class JellyfinClient:
     """Thin HTTP client for the Jellyfin REST API."""
@@ -51,6 +57,33 @@ class JellyfinClient:
         """GET /Items — search/browse items with query parameters."""
         data = self.get('/Items', params=params).json()
         return data.get('Items', [])
+
+    def get_item(self, item_id: str) -> dict:
+        """Get complete editable metadata without requiring a Jellyfin user."""
+        items = self.get_items({
+            'ids': item_id,
+            'recursive': 'true',
+            'fields': ','.join(_ITEM_METADATA_FIELDS),
+            'enableUserData': 'false',
+            'enableImages': 'false',
+        })
+        if len(items) != 1:
+            raise ValueError("Jellyfin item metadata was not uniquely resolved")
+        item = items[0]
+        if (item.get('Id') != item_id or not isinstance(item.get('Name'), str)
+                or item.get('Type') not in ('Movie', 'Episode')):
+            raise ValueError("Jellyfin returned incomplete or mismatched item metadata")
+        if not isinstance(item.get('LockData'), bool) or not isinstance(item.get('LockedFields'), list):
+            raise ValueError("Jellyfin item metadata is missing its metadata lock settings")
+        if not isinstance(item.get('Tags'), list) or not isinstance(item.get('Genres'), list):
+            raise ValueError("Jellyfin item metadata is missing tags or genres")
+        return item
+
+    def update_item(self, item_id: str, metadata: dict) -> None:
+        """POST complete metadata to /Items/{itemId}, preserving omitted null values."""
+        if metadata.get('Id') != item_id:
+            raise ValueError("Jellyfin item ID does not match its metadata")
+        self.post(f'/Items/{item_id}', json=metadata)
 
     def get_episodes(self, series_id: str, season: int) -> list:
         """GET /Shows/{seriesId}/Episodes — list episodes for a season."""

@@ -35,6 +35,7 @@ const mockedUseJellyfinTestConnectionMutation =
   useJellyfinTestConnectionMutation as Mock;
 
 const mockMutate = vitest.fn();
+const mockSaveSettings = vitest.fn();
 
 const baseSettings = {
   general: {
@@ -50,6 +51,8 @@ const baseSettings = {
     movie_library_ids: [] as string[],
     series_library: [] as string[],
     series_library_ids: [] as string[],
+    set_movie_added: false,
+    set_episode_added: false,
     update_movie_library: false,
     update_series_library: false,
   },
@@ -87,7 +90,7 @@ const setupMocks = (
     isRefetching: false,
   });
   mockedUseSettingsMutation.mockReturnValue({
-    mutate: vitest.fn(),
+    mutate: mockSaveSettings,
     isPending: false,
   });
   mockedUseJellyfinLibrariesQuery.mockReturnValue({
@@ -144,6 +147,54 @@ describe("SettingsJellyfinView", () => {
       }),
     ).toBeInTheDocument();
   });
+
+  it.each([
+    { kind: "movies", key: "set_movie_added", enabled: true },
+    { kind: "episodes", key: "set_episode_added", enabled: true },
+    { kind: "movies", key: "set_movie_added", enabled: false },
+    { kind: "episodes", key: "set_episode_added", enabled: false },
+  ])(
+    "should save recently added for $kind as $enabled",
+    async ({ kind, key, enabled }) => {
+      renderPage({
+        jellyfin: { ...baseSettings.jellyfin, [key]: !enabled },
+      });
+
+      const movieToggle = screen.getByRole("switch", {
+        name: "Mark movies as recently added after downloading subtitles",
+      });
+      const episodeToggle = screen.getByRole("switch", {
+        name: "Mark episodes as recently added after downloading subtitles",
+      });
+      const selectedToggle = kind === "movies" ? movieToggle : episodeToggle;
+      const otherToggle = kind === "movies" ? episodeToggle : movieToggle;
+
+      expect(selectedToggle).toHaveProperty("checked", !enabled);
+      expect(otherToggle).not.toBeChecked();
+
+      await userEvent.click(selectedToggle);
+
+      expect(selectedToggle).toHaveProperty("checked", enabled);
+      expect(otherToggle).not.toBeChecked();
+      expect(
+        screen.getByRole("switch", {
+          name: "Refresh movie metadata after downloading subtitles",
+        }),
+      ).not.toBeChecked();
+      expect(
+        screen.getByRole("switch", {
+          name: "Refresh series metadata after downloading subtitles",
+        }),
+      ).not.toBeChecked();
+
+      await userEvent.click(screen.getByRole("button", { name: /Save/ }));
+
+      expect(mockSaveSettings).toHaveBeenCalledExactlyOnceWith(
+        { ["settings-jellyfin-" + key]: enabled },
+        expect.objectContaining({ onSuccess: expect.any(Function) }),
+      );
+    },
+  );
 
   it("should hide connection options when jellyfin is disabled", () => {
     renderPage({

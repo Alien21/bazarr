@@ -237,6 +237,14 @@ const SettingsJellyfinContent: FunctionComponent = () => {
                 description="Select your movie library from Jellyfin"
               />
               <Check
+                label="Mark movies as recently added after downloading subtitles"
+                settingKey="settings-jellyfin-set_movie_added"
+              />
+              <Message>
+                Updates the movie's added date in Jellyfin so it appears in
+                Recently Added.
+              </Message>
+              <Check
                 label="Refresh movie metadata after downloading subtitles"
                 settingKey="settings-jellyfin-update_movie_library"
               />
@@ -250,6 +258,14 @@ const SettingsJellyfinContent: FunctionComponent = () => {
                 libraryType="tvshows"
                 description="Select your TV show library from Jellyfin"
               />
+              <Check
+                label="Mark episodes as recently added after downloading subtitles"
+                settingKey="settings-jellyfin-set_episode_added"
+              />
+              <Message>
+                Updates the episode's added date in Jellyfin so it appears in
+                Recently Added.
+              </Message>
               <Check
                 label="Refresh series metadata after downloading subtitles"
                 settingKey="settings-jellyfin-update_series_library"

@@ -9,6 +9,7 @@ interface Settings {
   radarr: Settings.Radarr;
   backup: Settings.Backup;
   translator: Settings.Translator;
+  jellyfin?: Settings.Jellyfin;
   // Anitcaptcha
   anticaptcha: Settings.Anticaptcha;
   deathbycaptcha: Settings.DeathByCaptche;
@@ -211,6 +212,20 @@ declare namespace Settings {
     autopulse_port?: number;
     autopulse_username?: string;
     autopulse_password?: string;
+  }
+
+  interface Jellyfin {
+    url?: string;
+    apikey?: string;
+    refresh_method?: "immediate" | "async";
+    movie_library?: string[];
+    movie_library_ids?: string[];
+    series_library?: string[];
+    series_library_ids?: string[];
+    set_movie_added?: boolean;
+    set_episode_added?: boolean;
+    update_movie_library?: boolean;
+    update_series_library?: boolean;
   }
 
   interface Anticaptcha {

@@ -293,6 +293,8 @@ validators = [
     Validator('jellyfin.series_library', must_exist=True, default=[], is_type_of=list),
     Validator('jellyfin.movie_library_ids', must_exist=True, default=[], is_type_of=list),
     Validator('jellyfin.series_library_ids', must_exist=True, default=[], is_type_of=list),
+    Validator('jellyfin.set_movie_added', must_exist=True, default=False, is_type_of=bool),
+    Validator('jellyfin.set_episode_added', must_exist=True, default=False, is_type_of=bool),
     Validator('jellyfin.update_movie_library', must_exist=True, default=False, is_type_of=bool),
     Validator('jellyfin.update_series_library', must_exist=True, default=False, is_type_of=bool),
     Validator('jellyfin.refresh_method', must_exist=True, default='immediate', is_type_of=str,

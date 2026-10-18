@@ -1,6 +1,8 @@
 # coding=utf-8
 
 import logging
+from copy import deepcopy
+from datetime import datetime, timezone
 
 from app.config import settings
 from .client import JellyfinClient
@@ -123,6 +125,57 @@ def _find_episode(client: JellyfinClient, series_id: str, season: int,
         logger.debug(f"Error finding episode S{season:02d}E{episode:02d} in series {series_id}: {e}")
 
     return None
+
+
+def jellyfin_set_movie_added_date_now(movie_metadata) -> None:
+    """Mark a movie as recently added in its configured Jellyfin library."""
+    _set_added_date_now(movie_metadata, is_movie=True)
+
+
+def jellyfin_set_episode_added_date_now(episode_metadata) -> None:
+    """Mark an episode as recently added without changing its series or siblings."""
+    _set_added_date_now(episode_metadata, is_movie=False)
+
+
+def _set_added_date_now(metadata, is_movie: bool) -> None:
+    try:
+        library_ids = (settings.jellyfin.movie_library_ids if is_movie
+                       else settings.jellyfin.series_library_ids)
+        if not isinstance(library_ids, list):
+            library_ids = [library_ids] if library_ids else []
+        if not library_ids:
+            logger.debug("No Jellyfin libraries configured for updating the added date")
+            return
+        imdb_id = getattr(metadata, 'imdbId', None)
+        tmdb_id = getattr(metadata, 'tmdbId', None) if is_movie else None
+        tvdb_id = getattr(metadata, 'tvdbId', None) if not is_movie else None
+        if not (imdb_id or tmdb_id or tvdb_id):
+            logger.warning("No provider IDs available for updating the Jellyfin added date")
+            return
+        client = get_jellyfin_client()
+        item = _find_item(client, is_movie, library_ids, imdb_id=imdb_id,
+                          tmdb_id=tmdb_id, tvdb_id=tvdb_id)
+        if not item:
+            logger.warning("Item not found in configured Jellyfin libraries; added date unchanged")
+            return
+        item_id = item['Id']
+        if not is_movie:
+            season = getattr(metadata, 'season', None)
+            episode = getattr(metadata, 'episode', None)
+            if season is None or episode is None:
+                logger.warning("Missing season or episode for updating the Jellyfin added date")
+                return
+            item_id = _find_episode(client, item_id, season, episode)
+            if not item_id:
+                logger.warning("Episode not found in Jellyfin; added date unchanged")
+                return
+        # Search results omit editable fields. Fetch the full metadata before updating it.
+        item_metadata = deepcopy(client.get_item(item_id))
+        item_metadata['DateCreated'] = datetime.now(timezone.utc).isoformat()
+        client.update_item(item_id, item_metadata)
+        logger.debug("Updated Jellyfin added date for %s", item_id)
+    except Exception as e:
+        logger.error("Failed to update Jellyfin added date: %s", e)
 
 
 def jellyfin_refresh_item(imdb_id: str = None, is_movie: bool = True, season: int = None,
