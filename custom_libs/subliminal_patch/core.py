@@ -52,7 +52,10 @@ _POOL_LIFETIME = datetime.timedelta(hours=12)
 HI_REGEX_WITHOUT_PARENTHESIS = re.compile(r'[*¶♫♪].{3,}[*¶♫♪]|[\[\{].{3,}[\]\}](?<!{\\an\d})')
 HI_REGEX_WITH_PARENTHESIS = re.compile(r'[*¶♫♪].{3,}[*¶♫♪]|[\[\(\{].{3,}[\]\)\}](?<!{\\an\d})')
 
-HI_REGEX_PARENTHESIS_EXCLUDED_LANGUAGES = ['ara']
+# Languages whose subtitles conventionally use parentheses for translator notes
+# rather than for sound cues, so the parenthesis arm of the HI heuristic would
+# mislabel ordinary subtitles as hearing-impaired.
+HI_REGEX_PARENTHESIS_EXCLUDED_LANGUAGES = ['ara', 'fas']
 
 
 def parse_for_hi_regex(subtitle_text, alpha3_language):
@@ -640,10 +643,10 @@ class SZProviderPool(ProviderPool):
         # 2. We are in a Bulk Task or Single Series search
         # 3. User enabled the Whisper fallback setting
         # 4. Whisper is actually in the active providers list
-        if (not downloaded_subtitles and 
-            fallback_allowed and 
+        if (not downloaded_subtitles and
+            fallback_allowed and
             'whisperai' in self.providers):
-            
+
             for subtitle, score, score_without_hash, matches, orig_matches in scored_subtitles:
                 if subtitle.provider_name == 'whisperai':
                     logger.info('BAZARR Bulk Task: Falling back to Whisper for %r', video.name)
@@ -1258,7 +1261,13 @@ def save_subtitles(file_path, subtitles, single=False, directory=None, chmod=Non
                 subtitle_path = os.path.splitext(subtitle_path)[0] + (u".%s" % format)
 
             logger.debug(u"Saving %r to %r", subtitle, subtitle_path)
-            content = subtitle.get_modified_content(format=format, debug=debug_mods)
+            try:
+                content = subtitle.get_modified_content(format=format, debug=debug_mods)
+            except UnicodeError as e:
+                # The caller only sees the list it passed in, so tag which member of it could not be decoded.
+                # We can then blacklist an individual subtitle rather than every subtitle in the batch.
+                e.bazarr_failed_subtitle = subtitle  # type: ignore[attr-defined]
+                raise
             if content:
                 if os.path.exists(subtitle_path):
                     os.remove(subtitle_path)

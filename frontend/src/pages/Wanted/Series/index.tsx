@@ -3,7 +3,6 @@ import { Link } from "react-router";
 import { Anchor, Badge, Group } from "@mantine/core";
 import { faFileLines, faSearch } from "@fortawesome/free-solid-svg-icons";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
-import { ColumnDef } from "@tanstack/react-table";
 import {
   useEpisodeSubtitleModification,
   useEpisodeWantedPagination,
@@ -11,6 +10,8 @@ import {
 } from "@/apis/hooks";
 import Language from "@/components/bazarr/Language";
 import TextPopover from "@/components/TextPopover";
+
+import { AppColumnDef as ColumnDef } from "@/components/tables/features";
 import WantedView from "@/pages/views/WantedView";
 import { BuildKey } from "@/utilities";
 
@@ -37,7 +38,7 @@ const WantedSeriesView: FunctionComponent = () => {
       },
       {
         header: "Episode",
-        accessorKey: "episode_number",
+        accessorKey: "episodeNumber",
       },
       {
         header: "Episode Title",
@@ -75,14 +76,10 @@ const WantedSeriesView: FunctionComponent = () => {
       },
       {
         header: "Missing",
-        accessorKey: "missing_subtitles",
+        accessorKey: "missingSubtitles",
         cell: ({
           row: {
-            original: {
-              sonarrSeriesId,
-              sonarrEpisodeId,
-              missing_subtitles: missingSubtitles,
-            },
+            original: { sonarrSeriesId, sonarrEpisodeId, missingSubtitles },
           },
         }) => {
           const seriesId = sonarrSeriesId;
@@ -92,7 +89,7 @@ const WantedSeriesView: FunctionComponent = () => {
             <Group gap="sm">
               {missingSubtitles.map((item, idx) => (
                 <Badge
-                  color={download.isPending ? "gray" : undefined}
+                  color={download.isPending ? "secondary" : undefined}
                   leftSection={<FontAwesomeIcon icon={faSearch} />}
                   key={BuildKey(idx, item.code2)}
                   style={{ cursor: "pointer" }}
