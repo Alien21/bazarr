@@ -22,7 +22,8 @@ const resolveRelative = (fromDir: string, relative: string): string => {
       stack.push(part);
     }
   }
-  return `/${stack.join("/")}`;
+  const root = fromDir.match(/^\/+/)?.[0] ?? "";
+  return `${root}${stack.join("/")}`;
 };
 
 const resolveModuleScssImport = (
@@ -136,6 +137,8 @@ const plugin = {
     },
     "no-cross-module-scss-import": {
       create(context: RuleContext) {
+        const filename = context.filename.replace(/\\/g, "/");
+
         return {
           ImportDeclaration(node: RuleNode) {
             const source = node.source as RuleNode;
@@ -145,20 +148,20 @@ const plugin = {
               return;
             }
 
-            const resolved = resolveModuleScssImport(context.filename, value);
+            const resolved = resolveModuleScssImport(filename, value);
             if (resolved === null) {
               return;
             }
 
-            const srcIndex = context.filename.indexOf("/src/");
+            const srcIndex = filename.indexOf("/src/");
             const srcRoot =
-              srcIndex === -1 ? null : context.filename.slice(0, srcIndex + 4);
+              srcIndex === -1 ? null : filename.slice(0, srcIndex + 4);
 
             if (srcRoot !== null && resolved.startsWith(`${srcRoot}/assets/`)) {
               return;
             }
 
-            if (dirName(resolved) === dirName(context.filename)) {
+            if (dirName(resolved) === dirName(filename)) {
               return;
             }
 

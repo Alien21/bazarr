@@ -9,9 +9,8 @@ import {
   useSeriesAction,
 } from "@/apis/hooks";
 import Language from "@/components/bazarr/Language";
-import TextPopover from "@/components/TextPopover";
-
 import { AppColumnDef as ColumnDef } from "@/components/tables/features";
+import TextPopover from "@/components/TextPopover";
 import WantedView from "@/pages/views/WantedView";
 import { BuildKey } from "@/utilities";
 
